@@ -495,7 +495,43 @@ export default function App() {
     });
   };
 
-  // Обро�  // Додавання розпізнаної страви у щоденник
+  // Обробка завантаження файлу зображення страви
+  const handleFileUpload = async (e) => {
+    if (!allowCameraTrigger) {
+      e.target.value = "";
+      return;
+    }
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      try {
+        const compressedBase64 = await compressImage(file);
+        await triggerScan(compressedBase64);
+      } catch (err) {
+        console.error("Помилка стиснення зображення страви, надсилаємо оригінал:", err);
+        await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            try {
+              await triggerScan(reader.result);
+              resolve();
+            } catch (scanErr) {
+              reject(scanErr);
+            }
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+      }
+    } catch (err) {
+      console.error("Помилка обробки файлу страви:", err);
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  // Додавання розпізнаної страви у щоденник
   const addScannedMealToDiary = () => {
     if (!scanResult) return;
 
