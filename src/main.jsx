@@ -20,5 +20,14 @@ if ('serviceWorker' in navigator) {
         console.error('Помилка реєстрації Service Worker:', err);
       });
   });
+
+  // Автоматичне перезавантаження сторінки при активації нового сервіс-воркера
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!refreshing) {
+      refreshing = true;
+      window.location.reload();
+    }
+  });
 }
 
