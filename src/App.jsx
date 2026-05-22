@@ -10,6 +10,7 @@ import {
   Trash2, 
   ChevronLeft, 
   ChevronRight, 
+  ChevronDown, 
   Moon, 
   Sun, 
   Key, 
@@ -28,6 +29,12 @@ import { mockFoods } from './data/mockFood';
 import { analyzeFoodImage, detectBarcodeFromImage } from './services/geminiService';
 import { getProductByBarcode } from './services/openFoodFactsService';
 
+// Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
+const parseLocalDate = (dateStr) => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+
 // Отримання поточної дати у форматі YYYY-MM-DD
 const getTodayString = (dateObj = new Date()) => {
   const year = dateObj.getFullYear();
@@ -40,16 +47,31 @@ const getTodayString = (dateObj = new Date()) => {
 const formatDateLabel = (dateStr) => {
   const today = getTodayString();
   const yesterday = getTodayString(new Date(Date.now() - 86400000));
+  const tomorrow = getTodayString(new Date(Date.now() + 86400000));
   
   if (dateStr === today) return 'Сьогодні';
   if (dateStr === yesterday) return 'Вчора';
+  if (dateStr === tomorrow) return 'Завтра';
 
-  const date = new Date(dateStr);
+  const date = parseLocalDate(dateStr);
   const months = [
     'січня', 'лютого', 'березня', 'квітня', 'травня', 'червня',
     'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'
   ];
   return `${date.getDate()} ${months[date.getMonth()]}`;
+};
+
+// Створення динамічного заголовка для дашборду відповідно до дати
+const getDashboardTitle = (dateStr) => {
+  const today = getTodayString();
+  const yesterday = getTodayString(new Date(Date.now() - 86400000));
+  const tomorrow = getTodayString(new Date(Date.now() + 86400000));
+  
+  if (dateStr === today) return 'Сьогоднішній огляд';
+  if (dateStr === yesterday) return 'Огляд за вчора';
+  if (dateStr === tomorrow) return 'Огляд на завтра';
+  
+  return `Огляд за ${formatDateLabel(dateStr)}`;
 };
 
 export default function App() {
@@ -239,7 +261,7 @@ export default function App() {
   // Синхронізація місяця календаря при зміні selectedDate
   useEffect(() => {
     if (selectedDate) {
-      setCalendarDate(new Date(selectedDate));
+      setCalendarDate(parseLocalDate(selectedDate));
     }
   }, [selectedDate]);
 
@@ -962,7 +984,7 @@ export default function App() {
 
   // Перемикання дат
   const changeDate = (days) => {
-    const current = new Date(selectedDate);
+    const current = parseLocalDate(selectedDate);
     current.setDate(current.getDate() + days);
     setSelectedDate(getTodayString(current));
   };
@@ -1031,14 +1053,14 @@ export default function App() {
           <div>
             {/* Date Swiper */}
             <div className="diary-day-header">
-              <h2 className="section-title" style={{ marginBottom: 0 }}>Сьогоднішній огляд</h2>
+              <h2 className="section-title" style={{ marginBottom: 0 }}>{getDashboardTitle(selectedDate)}</h2>
               <div className="date-picker-bar">
                 <button className="date-arrow-btn" onClick={() => changeDate(-1)}>
                   <ChevronLeft size={20} />
                 </button>
                 <span className="date-display">{formatDateLabel(selectedDate)}</span>
-                <button className="date-arrow-btn" onClick={() => changeDate(1)} disabled={selectedDate === getTodayString()}>
-                  <ChevronRight size={20} style={{ opacity: selectedDate === getTodayString() ? 0.3 : 1 }} />
+                <button className="date-arrow-btn" onClick={() => changeDate(1)}>
+                  <ChevronRight size={20} />
                 </button>
               </div>
             </div>
@@ -1391,7 +1413,7 @@ export default function App() {
 
                   {scanResult && (
                     <div className="scan-result-card">
-                      <div className="results-header">
+                      <div className="results-header" style={{ marginBottom: '8px' }}>
                         <div>
                           <span className="match-badge">
                             Точність розпізнавання: {scanResult.confidence}%
@@ -1399,6 +1421,22 @@ export default function App() {
                           <h2 className="dish-title">{scanResult.name}</h2>
                         </div>
                         <span style={{ fontSize: '28px' }}>🥗</span>
+                      </div>
+
+                      <div style={{ 
+                        display: 'inline-flex', 
+                        alignItems: 'center', 
+                        gap: '6px', 
+                        background: 'rgba(16, 185, 129, 0.1)', 
+                        border: '1px solid rgba(16, 185, 129, 0.2)', 
+                        borderRadius: '8px', 
+                        padding: '4px 10px', 
+                        fontSize: '12px', 
+                        color: '#34d399', 
+                        marginBottom: '16px',
+                        fontWeight: 500
+                      }}>
+                        📅 Запис у щоденник за: <strong style={{ marginLeft: '4px' }}>{formatDateLabel(selectedDate)}</strong>
                       </div>
 
                       <div className="results-macros-grid">
@@ -1603,7 +1641,7 @@ export default function App() {
 
                   {barcodeResult && (
                     <div className="scan-result-card" style={{ zIndex: 100 }}>
-                      <div className="results-header">
+                      <div className="results-header" style={{ marginBottom: '8px' }}>
                         <div className="barcode-product-info" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                           {barcodeResult.image ? (
                             <img src={barcodeResult.image} alt={barcodeResult.name} className="barcode-product-image" style={{ width: '56px', height: '56px', borderRadius: '12px', objectFit: 'cover' }} />
@@ -1617,6 +1655,22 @@ export default function App() {
                             <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px' }}>{barcodeResult.name}</h2>
                           </div>
                         </div>
+                      </div>
+
+                      <div style={{ 
+                        display: 'inline-flex', 
+                        alignItems: 'center', 
+                        gap: '6px', 
+                        background: 'rgba(59, 130, 246, 0.1)', 
+                        border: '1px solid rgba(59, 130, 246, 0.2)', 
+                        borderRadius: '8px', 
+                        padding: '4px 10px', 
+                        fontSize: '12px', 
+                        color: '#60a5fa', 
+                        marginBottom: '16px',
+                        fontWeight: 500
+                      }}>
+                        📅 Запис у щоденник за: <strong style={{ marginLeft: '4px' }}>{formatDateLabel(selectedDate)}</strong>
                       </div>
 
                       <div className="results-macros-grid">
@@ -2305,11 +2359,6 @@ export default function App() {
             e.stopPropagation();
             setActiveTab('scanner');
           }}
-          onTouchEnd={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setActiveTab('scanner');
-          }}
           title="Сканувати їжу"
         >
           <Camera size={30} />
@@ -2322,10 +2371,6 @@ export default function App() {
           <button 
             className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
             onClick={() => setActiveTab('dashboard')}
-            onTouchEnd={(e) => {
-              e.preventDefault();
-              setActiveTab('dashboard');
-            }}
           >
             <LayoutDashboard size={22} />
             <span>Головна</span>
@@ -2333,10 +2378,6 @@ export default function App() {
           <button 
             className={`nav-item ${activeTab === 'diary' ? 'active' : ''}`}
             onClick={() => setActiveTab('diary')}
-            onTouchEnd={(e) => {
-              e.preventDefault();
-              setActiveTab('diary');
-            }}
           >
             <Calendar size={22} />
             <span>Щоденник</span>
@@ -2348,10 +2389,6 @@ export default function App() {
           <button 
             className={`nav-item ${activeTab === 'profile' ? 'active' : ''}`}
             onClick={() => setActiveTab('profile')}
-            onTouchEnd={(e) => {
-              e.preventDefault();
-              setActiveTab('profile');
-            }}
           >
             <User size={22} />
             <span>Профіль</span>
@@ -2359,10 +2396,6 @@ export default function App() {
           <button 
             className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
             onClick={() => setActiveTab('settings')}
-            onTouchEnd={(e) => {
-              e.preventDefault();
-              setActiveTab('settings');
-            }}
           >
             <Settings size={22} />
             <span>Налаштування</span>
