@@ -124,9 +124,9 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     try {
       const stored = localStorage.getItem('nutrisnap_apikey');
-      return stored ? stored.trim() : 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+      return stored ? stored.trim() : '';
     } catch (e) {
-      return 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+      return '';
     }
   });
   const [scanMode, setScanMode] = useState(() => {
@@ -287,15 +287,9 @@ export default function App() {
     return streak;
   };
 
-  // Автоматичне налаштування API ключа та режиму сканування
+  // Автоматичне налаштування режиму сканування
   useEffect(() => {
     try {
-      const currentApiKey = localStorage.getItem('nutrisnap_apikey');
-      if (!currentApiKey) {
-        localStorage.setItem('nutrisnap_apikey', 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4');
-        setApiKey('AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4');
-      }
-      
       const currentScanMode = localStorage.getItem('nutrisnap_scanmode');
       if (!currentScanMode) {
         localStorage.setItem('nutrisnap_scanmode', 'gemini');
