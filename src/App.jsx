@@ -1523,6 +1523,20 @@ export default function App() {
                 </div>
               </div>
               <div className="water-actions">
+                <button 
+                  className="btn-water-add" 
+                  onClick={() => handleWaterAdd(-250)} 
+                  title="Зменшити на 250мл"
+                  style={{
+                    opacity: currentWater > 0 ? 1 : 0.5,
+                    pointerEvents: currentWater > 0 ? 'auto' : 'none',
+                    background: 'rgba(239, 68, 68, 0.08)',
+                    color: '#f87171',
+                    borderColor: 'rgba(239, 68, 68, 0.15)'
+                  }}
+                >
+                  -250
+                </button>
                 <button className="btn-water-add" onClick={() => handleWaterAdd(250)} title="Додати 250мл">
                   +250
                 </button>

@@ -370,7 +370,7 @@ body.light-mode .macro-bar-track {
 /* Quick scan floating action button */
 .scan-fab {
   position: absolute;
-  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(6px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   width: 64px;
@@ -508,7 +508,11 @@ body.light-mode .nav-item:hover {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 40px 20px;
+  padding-top: calc(140px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  padding-left: 20px;
+  padding-right: 20px;
+  box-sizing: border-box;
   pointer-events: none;
 }
 
@@ -921,8 +925,9 @@ body.light-mode .water-progress {
 }
 
 .btn-water-add {
-  width: 36px;
   height: 36px;
+  padding: 0 10px;
+  min-width: 38px;
   border-radius: 12px;
   background: rgba(59, 130, 246, 0.1);
   color: var(--color-water);
@@ -931,8 +936,8 @@ body.light-mode .water-progress {
   display: flex;
   justify-content: center;
   align-items: center;
-  font-weight: bold;
-  font-size: 18px;
+  font-weight: 600;
+  font-size: 12px;
   transition: var(--transition-smooth);
 }
 
