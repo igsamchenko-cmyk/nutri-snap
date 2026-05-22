@@ -1758,7 +1758,7 @@ export default function App() {
         {activeTab === 'scanner' && (
           <div className="camera-view-container">
             {/* Top Bar on camera view */}
-            <div className="app-header" style={{ position: 'absolute', top: 0, left: 0, width: '100%', background: 'rgba(0,0,0,0.6)', border: 'none', flexDirection: 'column', gap: '8px', padding: '12px 20px', zIndex: 60 }}>
+            <div className="app-header" style={{ position: 'absolute', top: 0, left: 0, width: '100%', background: 'rgba(0,0,0,0.6)', border: 'none', flexDirection: 'column', gap: '8px', padding: 'calc(12px + env(safe-area-inset-top, 0px)) 20px 12px', zIndex: 60 }}>
               <div style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
                 <button 
                   onClick={() => {
@@ -1796,7 +1796,7 @@ export default function App() {
             </div>
 
             {/* Shared Camera Preview Wrapper */}
-            <div className="camera-preview-wrapper" style={{ paddingTop: '120px' }}>
+            <div className="camera-preview-wrapper" style={{ paddingTop: 'calc(120px + env(safe-area-inset-top, 0px))' }}>
               <video 
                 ref={videoRef} 
                 autoPlay 
@@ -2415,7 +2415,7 @@ export default function App() {
 
             {/* Bottom Actions for Barcode Mode (Camera active, no result, no loading) */}
             {scannerMode === 'barcode' && cameraActive && !barcodeResult && !isBarcodeScanning && !barcodeLoading && (
-              <div className="camera-actions-wrapper" style={{ position: 'absolute', bottom: 0, left: 0, width: '100%', background: 'rgba(11, 15, 25, 0.85)', backdropFilter: 'blur(10px)', padding: '16px 20px 30px', display: 'flex', flexDirection: 'column', gap: '16px', zIndex: 60, borderTop: '1px solid rgba(255,255,255,0.08)', boxSizing: 'border-box' }}>
+              <div className="camera-actions-wrapper">
                 {/* Manual entry wrapper inside camera scanner */}
                 <div style={{ width: '100%' }}>
                   <form onSubmit={handleBarcodeSearch} className="barcode-input-wrapper" style={{ margin: 0 }}>
@@ -2499,7 +2499,7 @@ export default function App() {
 
             {/* Quick Food Selector for Simulation Mode */}
             {scannerMode === 'camera' && scanMode === 'mock' && cameraActive && !scanResult && !isScanning && (
-              <div style={{ background: '#090d16', padding: '16px 12px 24px', borderTop: '1px solid var(--border-dark)', overflow: 'hidden' }}>
+              <div style={{ background: '#090d16', padding: '16px 12px calc(16px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--border-dark)', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', padding: '0 4px' }}>
                   <p style={{ fontSize: '12px', color: 'var(--text-dark-secondary)', fontWeight: 600, margin: 0 }}>
                     Оберіть страву для симуляції сканування:
