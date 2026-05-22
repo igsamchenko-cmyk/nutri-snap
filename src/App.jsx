@@ -124,27 +124,17 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     try {
       const stored = localStorage.getItem('nutrisnap_apikey');
-      if (stored && stored.trim() === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') {
-        return '';
-      }
-      return stored ? stored.trim() : '';
+      return stored ? stored.trim() : 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
     } catch (e) {
-      return '';
+      return 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
     }
   });
   const [scanMode, setScanMode] = useState(() => {
     try {
       const storedMode = localStorage.getItem('nutrisnap_scanmode');
-      if (storedMode === 'gemini') {
-        // If they have the leaked key, fallback to mock by default for first experience
-        const storedKey = localStorage.getItem('nutrisnap_apikey');
-        if (!storedKey || storedKey.trim() === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') {
-          return 'mock';
-        }
-      }
-      return storedMode || 'mock';
+      return storedMode || 'gemini';
     } catch (e) {
-      return 'mock';
+      return 'gemini';
     }
   });
   const [geminiModel, setGeminiModel] = useState(() => {
@@ -297,28 +287,19 @@ export default function App() {
     return streak;
   };
 
-  // Автоматична чистка недійсного/витоку ключа та налаштування режиму сканування
+  // Автоматичне налаштування API ключа та режиму сканування
   useEffect(() => {
     try {
       const currentApiKey = localStorage.getItem('nutrisnap_apikey');
-      const LEAKED_KEY = 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
-      if (currentApiKey && currentApiKey.trim() === LEAKED_KEY) {
-        localStorage.removeItem('nutrisnap_apikey');
-        setApiKey('');
-      } else if (!currentApiKey) {
-        setApiKey('');
+      if (!currentApiKey) {
+        localStorage.setItem('nutrisnap_apikey', 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4');
+        setApiKey('AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4');
       }
       
       const currentScanMode = localStorage.getItem('nutrisnap_scanmode');
       if (!currentScanMode) {
-        localStorage.setItem('nutrisnap_scanmode', 'mock');
-        setScanMode('mock');
-      } else if (currentScanMode === 'gemini') {
-        // If it was gemini but key is missing/leaked, switch to mock automatically
-        if (!currentApiKey || currentApiKey.trim() === LEAKED_KEY) {
-          localStorage.setItem('nutrisnap_scanmode', 'mock');
-          setScanMode('mock');
-        }
+        localStorage.setItem('nutrisnap_scanmode', 'gemini');
+        setScanMode('gemini');
       }
     } catch (e) {
       console.error("Error auto-configuring API key:", e);
@@ -602,9 +583,8 @@ export default function App() {
     setScannedMealCategory(preselectedCategory || getDefaultCategory());
     try {
       if (scanMode === 'gemini') {
-        const LEAKED_KEY = 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
-        if (!apiKey || apiKey.trim() === '' || apiKey.trim() === LEAKED_KEY) {
-          throw new Error("Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+        if (!apiKey || apiKey.trim() === '') {
+          throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
         }
         // Запит до реального Gemini API
         const result = await analyzeFoodImage(imageDataBase64, apiKey.trim(), geminiModel);
@@ -841,9 +821,8 @@ export default function App() {
     try {
       let barcodeVal = null;
       if (scanMode === 'gemini') {
-        const LEAKED_KEY = 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
-        if (!apiKey || apiKey.trim() === '' || apiKey.trim() === LEAKED_KEY) {
-          throw new Error("Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+        if (!apiKey || apiKey.trim() === '') {
+          throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
         }
         barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey.trim(), geminiModel);
       } else {
@@ -3007,7 +2986,7 @@ export default function App() {
                       <span className="settings-info-text">
                         Ваш API-ключ зберігається локально на вашому пристрої у безпечному сховищі браузера та надсилається лише напряму до Google API.
                       </span>
-                      {(!apiKey || apiKey.trim() === '' || apiKey.trim() === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') && (
+                      {(!apiKey || apiKey.trim() === '') && (
                         <div style={{
                           marginTop: '8px',
                           padding: '10px',
@@ -3018,7 +2997,7 @@ export default function App() {
                           fontSize: '12px',
                           lineHeight: '1.4'
                         }}>
-                          <strong>⚠️ Увага:</strong> Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Для роботи ШІ-сканера, будь ласка, отримайте свій власний безкоштовний ключ на <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" style={{ color: '#f87171', textDecoration: 'underline', fontWeight: 600 }}>Google AI Studio</a> та введіть його вище.
+                          <strong>⚠️ Увага:</strong> Для роботи ШІ-сканера, будь ласка, отримайте свій власний безкоштовний ключ на <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" style={{ color: '#f87171', textDecoration: 'underline', fontWeight: 600 }}>Google AI Studio</a> та введіть його вище.
                           <div style={{ marginTop: '8px' }}>
                             <button
                               type="button"

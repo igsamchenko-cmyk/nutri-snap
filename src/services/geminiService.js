@@ -22,9 +22,7 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
   }
 
   const trimmedKey = apiKey.trim();
-  if (trimmedKey === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') {
-    throw new Error("Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
-  }
+
 
   // Очищення base64 префіксу (наприклад, data:image/jpeg;base64,) якщо він є
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
@@ -113,9 +111,7 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
   }
 
   const trimmedKey = apiKey.trim();
-  if (trimmedKey === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') {
-    throw new Error("Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
-  }
+
 
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
