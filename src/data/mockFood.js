@@ -10,6 +10,7 @@ export const mockFoods = [
     weight: 220,
     confidence: 96,
     icon: "🍳",
+    image: "/images/avocado_toast.png",
     ingredients: "Цільнозерновий хліб, стигле авокадо, яйце-пашот, оливкова олія, спеції."
   },
   {
@@ -23,6 +24,7 @@ export const mockFoods = [
     weight: 300,
     confidence: 98,
     icon: "🥣",
+    image: "/images/borscht.png",
     ingredients: "Буряк, капуста, картопля, морква, яловичина, сметана 15%."
   },
   {
@@ -36,6 +38,7 @@ export const mockFoods = [
     weight: 350,
     confidence: 94,
     icon: "🍗",
+    image: "/images/chicken_rice.png",
     ingredients: "Куряче філе без шкіри, дикий рис, броколі на пару, лимонний сік."
   },
   {
@@ -49,6 +52,7 @@ export const mockFoods = [
     weight: 250,
     confidence: 95,
     icon: "🥣",
+    image: "/images/oatmeal_banana.png",
     ingredients: "Вівсяні пластівці, молоко 2.5%, банан, мигдальні пластівці, мед."
   },
   {
@@ -62,6 +66,7 @@ export const mockFoods = [
     weight: 250,
     confidence: 92,
     icon: "🥗",
+    image: "/images/caesar_salad.png",
     ingredients: "Листя салату ромен, куряче філе гриль, грінки, сухарики, сир пармезан, соус Цезар."
   },
   {
@@ -75,6 +80,7 @@ export const mockFoods = [
     weight: 120,
     confidence: 97,
     icon: "🍕",
+    image: "/images/pizza_margherita.png",
     ingredients: "Тісто для піци, соус томатний, сир моцарела, базилік свіжий."
   },
   {
@@ -88,6 +94,7 @@ export const mockFoods = [
     weight: 160,
     confidence: 99,
     icon: "🍏",
+    image: "/images/green_apple.png",
     ingredients: "Свіже зелене яблуко."
   },
   {
@@ -101,6 +108,7 @@ export const mockFoods = [
     weight: 280,
     confidence: 93,
     icon: "🐟",
+    image: "/images/grilled_salmon.png",
     ingredients: "Філе лосося, спаржа (аспарагус), лимонний сік, оливкова олія, прованські трави."
   },
   {
@@ -114,6 +122,7 @@ export const mockFoods = [
     weight: 200,
     confidence: 95,
     icon: "🥗",
+    image: "/images/greek_salad.png",
     ingredients: "Помідори, огірки, болгарський перець, сир фета, оливки, оливкова олія."
   },
   {
@@ -127,6 +136,7 @@ export const mockFoods = [
     weight: 120,
     confidence: 98,
     icon: "🍌",
+    image: "/images/banana.png",
     ingredients: "Свіжий банан без шкірки."
   }
 ];

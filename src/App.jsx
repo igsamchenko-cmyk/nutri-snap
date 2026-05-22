@@ -23,7 +23,8 @@ import {
   User,
   QrCode,
   Download,
-  Database
+  Database,
+  Star
 } from 'lucide-react';
 import { mockFoods } from './data/mockFood';
 import { analyzeFoodImage, detectBarcodeFromImage } from './services/geminiService';
@@ -122,16 +123,28 @@ export default function App() {
   // Налаштування ШІ
   const [apiKey, setApiKey] = useState(() => {
     try {
-      return localStorage.getItem('nutrisnap_apikey') || 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+      const stored = localStorage.getItem('nutrisnap_apikey');
+      if (stored && stored.trim() === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') {
+        return '';
+      }
+      return stored ? stored.trim() : '';
     } catch (e) {
-      return 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+      return '';
     }
   });
   const [scanMode, setScanMode] = useState(() => {
     try {
-      return localStorage.getItem('nutrisnap_scanmode') || 'gemini';
+      const storedMode = localStorage.getItem('nutrisnap_scanmode');
+      if (storedMode === 'gemini') {
+        // If they have the leaked key, fallback to mock by default for first experience
+        const storedKey = localStorage.getItem('nutrisnap_apikey');
+        if (!storedKey || storedKey.trim() === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') {
+          return 'mock';
+        }
+      }
+      return storedMode || 'mock';
     } catch (e) {
-      return 'gemini';
+      return 'mock';
     }
   });
   const [geminiModel, setGeminiModel] = useState(() => {
@@ -142,18 +155,170 @@ export default function App() {
     }
   });
 
-  // Автоматичне встановлення наданого користувачем ключа та активація ШІ-режиму
+  // --- Favorite Meals & Toast Notification States ---
+  const [favorites, setFavorites] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nutrisnap_favorites');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Error reading nutrisnap_favorites:", e);
+      return [];
+    }
+  });
+
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_favorites', JSON.stringify(favorites));
+  }, [favorites]);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+  };
+
+  const isFavorite = (name) => {
+    if (!name) return false;
+    return favorites.some(f => f.name.toLowerCase() === name.toLowerCase());
+  };
+
+  const toggleFavoriteScanned = () => {
+    if (!scanResult) return;
+    const name = scanResult.name;
+    setFavorites(prev => {
+      const exists = prev.some(f => f.name.toLowerCase() === name.toLowerCase());
+      if (exists) {
+        showToast(`"${name}" видалено з обраного`, 'info');
+        return prev.filter(f => f.name.toLowerCase() !== name.toLowerCase());
+      } else {
+        showToast(`"${name}" додано до обраного`, 'success');
+        return [...prev, {
+          name: name,
+          calories: Number(scannedCalories) || 0,
+          protein: Number(scannedProtein) || 0,
+          fat: Number(scannedFat) || 0,
+          carbs: Number(scannedCarbs) || 0,
+          weight: Number(editedWeight) || 100,
+          image: selectedDemoFood?.image || ''
+        }];
+      }
+    });
+  };
+
+  const toggleFavoriteBarcode = () => {
+    if (!barcodeResult) return;
+    const name = barcodeResult.name;
+    setFavorites(prev => {
+      const exists = prev.some(f => f.name.toLowerCase() === name.toLowerCase());
+      if (exists) {
+        showToast(`"${name}" видалено з обраного`, 'info');
+        return prev.filter(f => f.name.toLowerCase() !== name.toLowerCase());
+      } else {
+        showToast(`"${name}" додано до обраного`, 'success');
+        return [...prev, {
+          name: name,
+          calories: Number(barcodeScannedCalories) || 0,
+          protein: Number(barcodeScannedProtein) || 0,
+          fat: Number(barcodeScannedFat) || 0,
+          carbs: Number(barcodeScannedCarbs) || 0,
+          weight: Number(barcodeEditedWeight) || 100,
+          image: ''
+        }];
+      }
+    });
+  };
+
+  const toggleFavoriteMeal = (meal) => {
+    if (!meal) return;
+    const name = meal.name;
+    setFavorites(prev => {
+      const exists = prev.some(f => f.name.toLowerCase() === name.toLowerCase());
+      if (exists) {
+        showToast(`"${name}" видалено з обраного`, 'info');
+        return prev.filter(f => f.name.toLowerCase() !== name.toLowerCase());
+      } else {
+        showToast(`"${name}" додано до обраного`, 'success');
+        return [...prev, {
+          name: name,
+          calories: Number(meal.calories) || 0,
+          protein: Number(meal.protein) || 0,
+          fat: Number(meal.fat) || 0,
+          carbs: Number(meal.carbs) || 0,
+          weight: Number(meal.weight) || 100,
+          image: meal.image || ''
+        }];
+      }
+    });
+  };
+
+  const calculateStreak = () => {
+    const activeDates = new Set();
+    meals.forEach(m => {
+      if (m.date) activeDates.add(m.date);
+    });
+    Object.keys(waterIntake).forEach(dateStr => {
+      if (waterIntake[dateStr] > 0) activeDates.add(dateStr);
+    });
+
+    let streak = 0;
+    let checkDate = new Date();
+    const getLocalDateStr = (d) => {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    };
+
+    let todayStr = getLocalDateStr(checkDate);
+    checkDate.setDate(checkDate.getDate() - 1);
+    let yesterdayStr = getLocalDateStr(checkDate);
+
+    if (activeDates.has(todayStr)) {
+      let tempDate = new Date();
+      while (activeDates.has(getLocalDateStr(tempDate))) {
+        streak++;
+        tempDate.setDate(tempDate.getDate() - 1);
+      }
+    } else if (activeDates.has(yesterdayStr)) {
+      let tempDate = new Date();
+      tempDate.setDate(tempDate.getDate() - 1);
+      while (activeDates.has(getLocalDateStr(tempDate))) {
+        streak++;
+        tempDate.setDate(tempDate.getDate() - 1);
+      }
+    }
+
+    return streak;
+  };
+
+  // Автоматична чистка недійсного/витоку ключа та налаштування режиму сканування
   useEffect(() => {
     try {
       const currentApiKey = localStorage.getItem('nutrisnap_apikey');
-      if (!currentApiKey || currentApiKey === '') {
-        localStorage.setItem('nutrisnap_apikey', 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4');
-        setApiKey('AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4');
+      const LEAKED_KEY = 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+      if (currentApiKey && currentApiKey.trim() === LEAKED_KEY) {
+        localStorage.removeItem('nutrisnap_apikey');
+        setApiKey('');
+      } else if (!currentApiKey) {
+        setApiKey('');
       }
+      
       const currentScanMode = localStorage.getItem('nutrisnap_scanmode');
-      if (!currentScanMode || currentScanMode === 'mock') {
-        localStorage.setItem('nutrisnap_scanmode', 'gemini');
-        setScanMode('gemini');
+      if (!currentScanMode) {
+        localStorage.setItem('nutrisnap_scanmode', 'mock');
+        setScanMode('mock');
+      } else if (currentScanMode === 'gemini') {
+        // If it was gemini but key is missing/leaked, switch to mock automatically
+        if (!currentApiKey || currentApiKey.trim() === LEAKED_KEY) {
+          localStorage.setItem('nutrisnap_scanmode', 'mock');
+          setScanMode('mock');
+        }
       }
     } catch (e) {
       console.error("Error auto-configuring API key:", e);
@@ -173,6 +338,10 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const [editedWeight, setEditedWeight] = useState(200);
+  const [scannedProtein, setScannedProtein] = useState(0);
+  const [scannedFat, setScannedFat] = useState(0);
+  const [scannedCarbs, setScannedCarbs] = useState(0);
+  const [scannedCalories, setScannedCalories] = useState(0);
   const [selectedDemoFood, setSelectedDemoFood] = useState(null);
   const [cameraStream, setCameraStream] = useState(null);
 
@@ -185,6 +354,10 @@ export default function App() {
   const [barcodeLoading, setBarcodeLoading] = useState(false);
   const [barcodeResult, setBarcodeResult] = useState(null);
   const [barcodeEditedWeight, setBarcodeEditedWeight] = useState(100);
+  const [barcodeScannedProtein, setBarcodeScannedProtein] = useState(0);
+  const [barcodeScannedFat, setBarcodeScannedFat] = useState(0);
+  const [barcodeScannedCarbs, setBarcodeScannedCarbs] = useState(0);
+  const [barcodeScannedCalories, setBarcodeScannedCalories] = useState(0);
   const [barcodeError, setBarcodeError] = useState(null);
   const [isBarcodeScanning, setIsBarcodeScanning] = useState(false);
 
@@ -279,7 +452,7 @@ export default function App() {
   }, [profile]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_apikey', apiKey);
+    localStorage.setItem('nutrisnap_apikey', apiKey.trim());
   }, [apiKey]);
 
   useEffect(() => {
@@ -430,11 +603,19 @@ export default function App() {
     setScanResult(null);
     setScannedMealCategory(preselectedCategory || getDefaultCategory());
     try {
-      if (scanMode === 'gemini' && apiKey) {
+      if (scanMode === 'gemini') {
+        const LEAKED_KEY = 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+        if (!apiKey || apiKey.trim() === '' || apiKey.trim() === LEAKED_KEY) {
+          throw new Error("Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+        }
         // Запит до реального Gemini API
-        const result = await analyzeFoodImage(imageDataBase64, apiKey, geminiModel);
+        const result = await analyzeFoodImage(imageDataBase64, apiKey.trim(), geminiModel);
         setScanResult(result);
         setEditedWeight(Number(result.weight) || 200);
+        setScannedProtein(Number(result.protein) || 0);
+        setScannedFat(Number(result.fat) || 0);
+        setScannedCarbs(Number(result.carbs) || 0);
+        setScannedCalories(Number(result.calories) || 0);
       } else {
         // Демо-режим (симуляція аналізу 1.5 сек)
         await new Promise(resolve => setTimeout(resolve, 1500));
@@ -458,10 +639,14 @@ export default function App() {
         };
         setScanResult(mockResult);
         setEditedWeight(Number(mockResult.weight) || 200);
+        setScannedProtein(Number(mockResult.protein) || 0);
+        setScannedFat(Number(mockResult.fat) || 0);
+        setScannedCarbs(Number(mockResult.carbs) || 0);
+        setScannedCalories(Number(mockResult.calories) || 0);
       }
     } catch (err) {
       console.error(err);
-      alert(err.message || "Помилка під час аналізу страви.");
+      showToast(err.message || "Помилка під час аналізу страви.", "error");
     } finally {
       setIsScanning(false);
     }
@@ -566,6 +751,49 @@ export default function App() {
     }
   };
 
+  // Обробник ручної зміни білків, жирів та вуглеводів для камери
+  const handleScanMacroChange = (macro, value) => {
+    let p = scannedProtein;
+    let f = scannedFat;
+    let c = scannedCarbs;
+    
+    if (macro === 'protein') {
+      setScannedProtein(value);
+      p = value;
+    } else if (macro === 'fat') {
+      setScannedFat(value);
+      f = value;
+    } else if (macro === 'carbs') {
+      setScannedCarbs(value);
+      c = value;
+    }
+    
+    const pVal = p === '' ? 0 : (parseFloat(p) || 0);
+    const fVal = f === '' ? 0 : (parseFloat(f) || 0);
+    const cVal = c === '' ? 0 : (parseFloat(c) || 0);
+    
+    setScannedCalories(Math.round(pVal * 4 + fVal * 9 + cVal * 4));
+  };
+
+  // Обробник ручної зміни ваги страви з масштабуванням КБЖВ
+  const handleScanWeightChange = (value) => {
+    setEditedWeight(value);
+    if (!scanResult) return;
+    
+    const baselineWeight = Number(scanResult.weight) || 200;
+    const currentWeightVal = Number(value) || 0;
+    const scale = currentWeightVal > 0 ? (currentWeightVal / baselineWeight) : 0;
+    
+    const p = Math.round(Number(scanResult.protein || 0) * scale * 10) / 10;
+    const f = Math.round(Number(scanResult.fat || 0) * scale * 10) / 10;
+    const c = Math.round(Number(scanResult.carbs || 0) * scale * 10) / 10;
+    
+    setScannedProtein(p);
+    setScannedFat(f);
+    setScannedCarbs(c);
+    setScannedCalories(Math.round(p * 4 + f * 9 + c * 4));
+  };
+
   // Додавання розпізнаної страви у щоденник
   const addScannedMealToDiary = () => {
     if (!scanResult) return;
@@ -575,12 +803,11 @@ export default function App() {
 
     const baselineWeight = Number(scanResult.weight) || 200;
     const finalWeight = Number(editedWeight) || baselineWeight;
-    const scale = finalWeight / baselineWeight;
 
-    const finalCalories = Math.round(Number(scanResult.calories) * scale);
-    const finalProtein = Math.round(Number(scanResult.protein) * scale * 10) / 10;
-    const finalFat = Math.round(Number(scanResult.fat) * scale * 10) / 10;
-    const finalCarbs = Math.round(Number(scanResult.carbs) * scale * 10) / 10;
+    const finalCalories = Number(scannedCalories) || 0;
+    const finalProtein = Number(scannedProtein) || 0;
+    const finalFat = Number(scannedFat) || 0;
+    const finalCarbs = Number(scannedCarbs) || 0;
 
     const newMeal = {
       id: Date.now().toString(),
@@ -604,7 +831,7 @@ export default function App() {
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     
-    alert(`Страву "${scanResult.name}" додано до щоденника!`);
+    showToast(`Страву "${scanResult.name}" додано до щоденника!`, "success");
     
     setScanResult(null);
     setSelectedDemoFood(null);
@@ -619,8 +846,12 @@ export default function App() {
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     try {
       let barcodeVal = null;
-      if (scanMode === 'gemini' && apiKey) {
-        barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey, geminiModel);
+      if (scanMode === 'gemini') {
+        const LEAKED_KEY = 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+        if (!apiKey || apiKey.trim() === '' || apiKey.trim() === LEAKED_KEY) {
+          throw new Error("Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+        }
+        barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey.trim(), geminiModel);
       } else {
         await new Promise(resolve => setTimeout(resolve, 1500));
         const mockBarcodes = ["8000500023976", "5449000000996", "5900311000361"];
@@ -636,7 +867,13 @@ export default function App() {
       setBarcodeLoading(true);
       const product = await getProductByBarcode(barcodeVal);
       setBarcodeResult(product);
-      setBarcodeEditedWeight(product.weight || 100);
+      const w = product.weight || 100;
+      setBarcodeEditedWeight(w);
+      const scale = w / 100;
+      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
+      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
+      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
+      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
     } catch (err) {
       console.error(err);
       setBarcodeError(err.message || "Помилка при зчитуванні штрих-коду.");
@@ -719,13 +956,62 @@ export default function App() {
     try {
       const product = await getProductByBarcode(barcodeInput);
       setBarcodeResult(product);
-      setBarcodeEditedWeight(product.weight || 100);
+      const w = product.weight || 100;
+      setBarcodeEditedWeight(w);
+      const scale = w / 100;
+      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
+      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
+      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
+      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
     } catch (err) {
       console.error("Barcode lookup error:", err);
       setBarcodeError(err.message || "Не вдалося знайти продукт.");
     } finally {
       setBarcodeLoading(false);
     }
+  };
+
+  // Обробник ручної зміни білків, жирів та вуглеводів для штрих-коду
+  const handleBarcodeMacroChange = (macro, value) => {
+    let p = barcodeScannedProtein;
+    let f = barcodeScannedFat;
+    let c = barcodeScannedCarbs;
+    
+    if (macro === 'protein') {
+      setBarcodeScannedProtein(value);
+      p = value;
+    } else if (macro === 'fat') {
+      setBarcodeScannedFat(value);
+      f = value;
+    } else if (macro === 'carbs') {
+      setBarcodeScannedCarbs(value);
+      c = value;
+    }
+    
+    const pVal = p === '' ? 0 : (parseFloat(p) || 0);
+    const fVal = f === '' ? 0 : (parseFloat(f) || 0);
+    const cVal = c === '' ? 0 : (parseFloat(c) || 0);
+    
+    setBarcodeScannedCalories(Math.round(pVal * 4 + fVal * 9 + cVal * 4));
+  };
+
+  // Обробник ручної зміни ваги порції для штрих-коду з масштабуванням КБЖВ
+  const handleBarcodeWeightChange = (value) => {
+    setBarcodeEditedWeight(value);
+    if (!barcodeResult) return;
+    
+    const baselineWeight = 100;
+    const currentWeightVal = Number(value) || 0;
+    const scale = currentWeightVal > 0 ? (currentWeightVal / baselineWeight) : 0;
+    
+    const p = Math.round(Number(barcodeResult.protein || 0) * scale * 10) / 10;
+    const f = Math.round(Number(barcodeResult.fat || 0) * scale * 10) / 10;
+    const c = Math.round(Number(barcodeResult.carbs || 0) * scale * 10) / 10;
+    
+    setBarcodeScannedProtein(p);
+    setBarcodeScannedFat(f);
+    setBarcodeScannedCarbs(c);
+    setBarcodeScannedCalories(Math.round(p * 4 + f * 9 + c * 4));
   };
 
   // Додавання знайденого за штрих-кодом продукту у щоденник
@@ -737,12 +1023,11 @@ export default function App() {
 
     const baselineWeight = 100;
     const finalWeight = Number(barcodeEditedWeight) || 100;
-    const scale = finalWeight / baselineWeight;
 
-    const finalCalories = Math.round(Number(barcodeResult.calories) * scale);
-    const finalProtein = Math.round(Number(barcodeResult.protein) * scale * 10) / 10;
-    const finalFat = Math.round(Number(barcodeResult.fat) * scale * 10) / 10;
-    const finalCarbs = Math.round(Number(barcodeResult.carbs) * scale * 10) / 10;
+    const finalCalories = Number(barcodeScannedCalories) || 0;
+    const finalProtein = Number(barcodeScannedProtein) || 0;
+    const finalFat = Number(barcodeScannedFat) || 0;
+    const finalCarbs = Number(barcodeScannedCarbs) || 0;
 
     const newMeal = {
       id: Date.now().toString(),
@@ -765,7 +1050,7 @@ export default function App() {
 
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
-    alert(`Продукт "${barcodeResult.name}" додано до щоденника!`);
+    showToast(`Продукт "${barcodeResult.name}" додано до щоденника!`, "success");
     
     setBarcodeResult(null);
     setBarcodeInput('');
@@ -825,6 +1110,47 @@ export default function App() {
           originalProtein: origProt,
           originalFat: origFat,
           originalCarbs: origCarbs
+        };
+      }
+      return meal;
+    }));
+  };
+
+  // Оновлення макросів страви з автоматичним перерахунком калорійності
+  const handleUpdateMealMacro = (mealId, macroKey, value) => {
+    setMeals(prevMeals => prevMeals.map(meal => {
+      if (meal.id === mealId) {
+        let p = meal.protein;
+        let f = meal.fat;
+        let c = meal.carbs;
+
+        const numVal = value === "" ? 0 : (parseFloat(value) || 0);
+
+        if (macroKey === 'protein') {
+          p = value === "" ? "" : numVal;
+        } else if (macroKey === 'fat') {
+          f = value === "" ? "" : numVal;
+        } else if (macroKey === 'carbs') {
+          c = value === "" ? "" : numVal;
+        }
+
+        const pVal = p === "" ? 0 : p;
+        const fVal = f === "" ? 0 : f;
+        const cVal = c === "" ? 0 : c;
+
+        const newCals = Math.round(pVal * 4 + fVal * 9 + cVal * 4);
+
+        return {
+          ...meal,
+          protein: p,
+          fat: f,
+          carbs: c,
+          calories: newCals,
+          originalProtein: pVal,
+          originalFat: fVal,
+          originalCarbs: cVal,
+          originalCalories: newCals,
+          originalWeight: Number(meal.weight) || 100
         };
       }
       return meal;
@@ -920,7 +1246,7 @@ export default function App() {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Помилка експорту даних:", error);
-      alert("Не вдалося експортувати дані: " + error.message);
+      showToast("Не вдалося експортувати дані: " + error.message, "error");
     }
   };
 
@@ -966,11 +1292,11 @@ export default function App() {
           setTheme(importedData.theme);
         }
         
-        alert("Дані успішно імпортовано! Додаток оновлено.");
+        showToast("Дані успішно імпортовано! Додаток оновлено.", "success");
         e.target.value = '';
       } catch (error) {
         console.error("Помилка імпорту даних:", error);
-        alert("Не вдалося імпортувати дані. Перевірте, чи файл правильного формату та чи він не пошкоджений.\nДеталі: " + error.message);
+        showToast("Не вдалося імпортувати дані. Перевірте, чи файл правильного формату та чи він не пошкоджений.\nДеталі: " + error.message, "error");
       }
     };
     reader.readAsText(file);
@@ -991,23 +1317,6 @@ export default function App() {
 
   // Розрахунок масштабованих КБЖВ для картки результатів сканування
   const baselineWeight = scanResult ? (Number(scanResult.weight) || 200) : 200;
-  const currentWeightVal = Number(editedWeight) || 0;
-  const scanScaleFactor = currentWeightVal > 0 ? (currentWeightVal / baselineWeight) : 0;
-
-  const scaledCalories = scanResult ? Math.round(Number(scanResult.calories) * scanScaleFactor) : 0;
-  const scaledProtein = scanResult ? Math.round(Number(scanResult.protein) * scanScaleFactor * 10) / 10 : 0;
-  const scaledFat = scanResult ? Math.round(Number(scanResult.fat) * scanScaleFactor * 10) / 10 : 0;
-  const scaledCarbs = scanResult ? Math.round(Number(scanResult.carbs) * scanScaleFactor * 10) / 10 : 0;
-
-  // Розрахунок КБЖВ для картки штрих-коду
-  const barcodeBaselineWeight = 100;
-  const currentBarcodeWeightVal = Number(barcodeEditedWeight) || 0;
-  const barcodeScaleFactor = currentBarcodeWeightVal > 0 ? (currentBarcodeWeightVal / barcodeBaselineWeight) : 0;
-
-  const scaledBarcodeCalories = barcodeResult ? Math.round(Number(barcodeResult.calories) * barcodeScaleFactor) : 0;
-  const scaledBarcodeProtein = barcodeResult ? Math.round(Number(barcodeResult.protein) * barcodeScaleFactor * 10) / 10 : 0;
-  const scaledBarcodeFat = barcodeResult ? Math.round(Number(barcodeResult.fat) * barcodeScaleFactor * 10) / 10 : 0;
-  const scaledBarcodeCarbs = barcodeResult ? Math.round(Number(barcodeResult.carbs) * barcodeScaleFactor * 10) / 10 : 0;
 
 
 
@@ -1053,7 +1362,18 @@ export default function App() {
           <div>
             {/* Date Swiper */}
             <div className="diary-day-header">
-              <h2 className="section-title" style={{ marginBottom: 0 }}>{getDashboardTitle(selectedDate)}</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <h2 className="section-title" style={{ marginBottom: 0 }}>{getDashboardTitle(selectedDate)}</h2>
+                {(() => {
+                  const streak = calculateStreak();
+                  return streak > 0 ? (
+                    <div className="streak-badge" title={`Серія активності: ${streak} днів`}>
+                      <Flame size={16} className="streak-flame-icon" />
+                      <span>{streak} дн.</span>
+                    </div>
+                  ) : null;
+                })()}
+              </div>
               <div className="date-picker-bar">
                 <button className="date-arrow-btn" onClick={() => changeDate(-1)}>
                   <ChevronLeft size={20} />
@@ -1145,8 +1465,57 @@ export default function App() {
             {/* Water Tracker */}
             <div className="glass-card water-tracker-card">
               <div className="water-left">
-                <div className="water-icon-box">
-                  <Droplet size={24} />
+                <div className="water-icon-box" style={{ overflow: 'visible', position: 'relative' }}>
+                  {(() => {
+                    const waterPercent = Math.min((currentWater / 2000) * 100, 100);
+                    return (
+                      <svg 
+                        viewBox="0 0 24 24" 
+                        width="28" 
+                        height="28" 
+                        style={{ overflow: 'visible' }}
+                        className="water-droplet-svg"
+                      >
+                        <defs>
+                          <linearGradient id="waterDropletGrad" x1="0" y1="1" x2="0" y2="0">
+                            {/* Filled part (blue gradient) */}
+                            <stop offset="0%" stopColor="#1d4ed8" />
+                            <stop offset={`${waterPercent}%`} stopColor="#3b82f6" />
+                            {/* Empty/translucent part */}
+                            <stop offset={`${waterPercent}%`} stopColor="rgba(59, 130, 246, 0.05)" />
+                            <stop offset="100%" stopColor="rgba(255, 255, 255, 0.02)" />
+                          </linearGradient>
+                          <filter id="waterGlow" x="-20%" y="-20%" width="140%" height="140%">
+                            <feGaussianBlur stdDeviation="1.5" result="blur" />
+                            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                          </filter>
+                        </defs>
+                        <path 
+                          d="M12 22C17.5 22 21 18.5 21 14C21 9 12 2.5 12 2.5C12 2.5 3 9 3 14C3 18.5 6.5 22 12 22Z" 
+                          fill="url(#waterDropletGrad)" 
+                          stroke={waterPercent > 0 ? '#60a5fa' : 'rgba(59, 130, 246, 0.3)'}
+                          strokeWidth="1.8" 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round"
+                          style={{
+                            transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                            filter: waterPercent >= 100 ? 'url(#waterGlow)' : 'none'
+                          }}
+                        />
+                        {/* 3D Reflection Highlight */}
+                        <path 
+                          d="M8.5 13.5C8.1 14.5 8.3 15.8 9 16.5" 
+                          stroke="rgba(255, 255, 255, 0.4)" 
+                          strokeWidth="1" 
+                          strokeLinecap="round"
+                          style={{ 
+                            opacity: waterPercent > 30 ? 1 : 0.1, 
+                            transition: 'opacity 0.5s' 
+                          }}
+                        />
+                      </svg>
+                    );
+                  })()}
                 </div>
                 <div>
                   <h3 className="water-title">Вода</h3>
@@ -1162,6 +1531,85 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* Favorites Scroll Tray */}
+            {favorites.length > 0 && (
+              <div className="favorites-container" style={{ marginTop: '24px' }}>
+                <h3 className="section-title" style={{ marginBottom: '12px' }}>Обрані страви</h3>
+                <div className="favorites-scroll-tray">
+                  {favorites.map((fav, index) => (
+                    <div key={index} className="favorite-meal-card">
+                      {fav.image ? (
+                        <img src={fav.image} alt={fav.name} className="favorite-meal-img" />
+                      ) : (
+                        <div className="favorite-meal-img-placeholder">
+                          <span>🍳</span>
+                        </div>
+                      )}
+                      <div className="favorite-meal-info">
+                        <span className="favorite-meal-name" title={fav.name}>{fav.name}</span>
+                        <span className="favorite-meal-kcal">{fav.calories} ккал</span>
+                        <span className="favorite-meal-weight">{fav.weight}г</span>
+                      </div>
+                      <div className="favorite-meal-actions">
+                        <button 
+                          className="btn-fav-add" 
+                          onClick={() => {
+                            const category = getDefaultCategory();
+                            const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+                            const newMeal = {
+                              id: Date.now().toString(),
+                              name: fav.name,
+                              calories: Number(fav.calories) || 0,
+                              protein: Number(fav.protein) || 0,
+                              fat: Number(fav.fat) || 0,
+                              carbs: Number(fav.carbs) || 0,
+                              weight: Number(fav.weight) || 100,
+                              originalCalories: Number(fav.calories) || 0,
+                              originalProtein: Number(fav.protein) || 0,
+                              originalFat: Number(fav.fat) || 0,
+                              originalCarbs: Number(fav.carbs) || 0,
+                              originalWeight: Number(fav.weight) || 100,
+                              category,
+                              time: mealTimeStr,
+                              date: selectedDate,
+                              icon: getEmojiForCategory(category),
+                              image: fav.image || ''
+                            };
+                            setMeals(prev => [newMeal, ...prev]);
+                            showToast(`"${fav.name}" додано до щоденника!`, "success");
+                          }}
+                          title="Додати в щоденник"
+                        >
+                          Додати
+                        </button>
+                        <button 
+                          className="btn-fav-remove" 
+                          onClick={() => {
+                            setFavorites(prev => prev.filter(f => f.name.toLowerCase() !== fav.name.toLowerCase()));
+                            showToast(`"${fav.name}" видалено з обраного`, "info");
+                          }}
+                          title="Видалити з шаблонів"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'rgba(255, 255, 255, 0.4)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '4px',
+                            transition: 'color 0.2s'
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Meals Timeline */}
             <div style={{ marginTop: '24px' }}>
@@ -1242,8 +1690,56 @@ export default function App() {
                               </div>
                               <div className="meal-calories-details">
                                 <span className="meal-kcal">{meal.calories} ккал</span>
-                                <span className="meal-macros">Б:{meal.protein}г Ж:{meal.fat}г В:{meal.carbs}г</span>
+                                <span className="meal-macros" style={{ display: 'flex', alignItems: 'center', gap: '3px', flexWrap: 'wrap', marginTop: '3px' }}>
+                                  <span>Б:</span>
+                                  <input 
+                                    type="number"
+                                    value={meal.protein}
+                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
+                                    className="meal-macro-inline-input"
+                                    min="0"
+                                    step="0.1"
+                                  />
+                                  <span>г Ж:</span>
+                                  <input 
+                                    type="number"
+                                    value={meal.fat}
+                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
+                                    className="meal-macro-inline-input"
+                                    min="0"
+                                    step="0.1"
+                                  />
+                                  <span>г В:</span>
+                                  <input 
+                                    type="number"
+                                    value={meal.carbs}
+                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
+                                    className="meal-macro-inline-input"
+                                    min="0"
+                                    step="0.1"
+                                  />
+                                  <span>г</span>
+                                </span>
                               </div>
+                              <button 
+                                className={`meal-favorite-btn ${isFavorite(meal.name) ? 'active' : ''}`} 
+                                onClick={() => toggleFavoriteMeal(meal)} 
+                                title={isFavorite(meal.name) ? "Видалити з обраного" : "Додати в обране"}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  padding: '4px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color: isFavorite(meal.name) ? '#ffb800' : 'rgba(255, 255, 255, 0.4)',
+                                  transition: 'color 0.2s ease',
+                                  marginRight: '6px'
+                                }}
+                              >
+                                <Star size={16} fill={isFavorite(meal.name) ? "#ffb800" : "none"} />
+                              </button>
                               <button className="meal-delete-btn" onClick={() => deleteMeal(meal.id)} title="Видалити">
                                 <Trash2 size={16} />
                               </button>
@@ -1441,19 +1937,52 @@ export default function App() {
 
                       <div className="results-macros-grid">
                         <div className="results-macro-box box-kcal">
-                          <div className="macro-box-val" style={{ color: 'var(--color-calories)' }}>{scaledCalories}</div>
+                          <div className="macro-box-val" style={{ color: 'var(--color-calories)' }}>{scannedCalories}</div>
                           <div className="macro-box-label">ккал</div>
                         </div>
                         <div className="results-macro-box box-protein">
-                          <div className="macro-box-val" style={{ color: 'var(--color-protein)' }}>{scaledProtein}г</div>
+                          <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                            <input 
+                              type="number"
+                              className="macro-box-input"
+                              value={scannedProtein}
+                              onChange={(e) => handleScanMacroChange('protein', e.target.value)}
+                              style={{ color: 'var(--color-protein)' }}
+                              min="0"
+                              step="0.1"
+                            />
+                            <span style={{ color: 'var(--color-protein)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                          </div>
                           <div className="macro-box-label">білки</div>
                         </div>
                         <div className="results-macro-box box-fat">
-                          <div className="macro-box-val" style={{ color: 'var(--color-fat)' }}>{scaledFat}г</div>
+                          <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                            <input 
+                              type="number"
+                              className="macro-box-input"
+                              value={scannedFat}
+                              onChange={(e) => handleScanMacroChange('fat', e.target.value)}
+                              style={{ color: 'var(--color-fat)' }}
+                              min="0"
+                              step="0.1"
+                            />
+                            <span style={{ color: 'var(--color-fat)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                          </div>
                           <div className="macro-box-label">жири</div>
                         </div>
                         <div className="results-macro-box box-carbs">
-                          <div className="macro-box-val" style={{ color: 'var(--color-carbs)' }}>{scaledCarbs}г</div>
+                          <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                            <input 
+                              type="number"
+                              className="macro-box-input"
+                              value={scannedCarbs}
+                              onChange={(e) => handleScanMacroChange('carbs', e.target.value)}
+                              style={{ color: 'var(--color-carbs)' }}
+                              min="0"
+                              step="0.1"
+                            />
+                            <span style={{ color: 'var(--color-carbs)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                          </div>
                           <div className="macro-box-label">вуглеводи</div>
                         </div>
                       </div>
@@ -1480,7 +2009,7 @@ export default function App() {
                             type="number"
                             className="weight-input"
                             value={editedWeight}
-                            onChange={(e) => setEditedWeight(e.target.value)}
+                            onChange={(e) => handleScanWeightChange(e.target.value)}
                             min="1"
                             max="5000"
                           />
@@ -1497,11 +2026,33 @@ export default function App() {
                         </div>
                       )}
 
-                      <div style={{ marginTop: '20px' }}>
-                        <button className="btn-primary" onClick={addScannedMealToDiary}>
-                          <Check size={18} />
-                          Додати до щоденника
-                        </button>
+                      <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                          <button className="btn-primary" style={{ flex: 1 }} onClick={addScannedMealToDiary}>
+                            <Check size={18} />
+                            Додати до щоденника
+                          </button>
+                          <button 
+                            className={`btn-favorite-toggle ${isFavorite(scanResult?.name) ? 'active' : ''}`}
+                            onClick={toggleFavoriteScanned}
+                            title={isFavorite(scanResult?.name) ? "Видалити з обраного" : "Додати в обране"}
+                            style={{
+                              width: '46px',
+                              height: '46px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              borderRadius: '12px',
+                              border: '1px solid rgba(255, 255, 255, 0.15)',
+                              background: isFavorite(scanResult?.name) ? 'rgba(255, 184, 0, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                              color: isFavorite(scanResult?.name) ? '#ffb800' : 'rgba(255, 255, 255, 0.8)',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                            }}
+                          >
+                            <Star size={20} fill={isFavorite(scanResult?.name) ? "#ffb800" : "none"} />
+                          </button>
+                        </div>
                         <button 
                           className="btn-secondary" 
                           onClick={() => {
@@ -1675,19 +2226,52 @@ export default function App() {
 
                       <div className="results-macros-grid">
                         <div className="results-macro-box box-kcal">
-                          <div className="macro-box-val" style={{ color: 'var(--color-calories)' }}>{scaledBarcodeCalories}</div>
+                          <div className="macro-box-val" style={{ color: 'var(--color-calories)' }}>{barcodeScannedCalories}</div>
                           <div className="macro-box-label">ккал</div>
                         </div>
                         <div className="results-macro-box box-protein">
-                          <div className="macro-box-val" style={{ color: 'var(--color-protein)' }}>{scaledBarcodeProtein}г</div>
+                          <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                            <input 
+                              type="number"
+                              className="macro-box-input"
+                              value={barcodeScannedProtein}
+                              onChange={(e) => handleBarcodeMacroChange('protein', e.target.value)}
+                              style={{ color: 'var(--color-protein)' }}
+                              min="0"
+                              step="0.1"
+                            />
+                            <span style={{ color: 'var(--color-protein)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                          </div>
                           <div className="macro-box-label">білки</div>
                         </div>
                         <div className="results-macro-box box-fat">
-                          <div className="macro-box-val" style={{ color: 'var(--color-fat)' }}>{scaledBarcodeFat}г</div>
+                          <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                            <input 
+                              type="number"
+                              className="macro-box-input"
+                              value={barcodeScannedFat}
+                              onChange={(e) => handleBarcodeMacroChange('fat', e.target.value)}
+                              style={{ color: 'var(--color-fat)' }}
+                              min="0"
+                              step="0.1"
+                            />
+                            <span style={{ color: 'var(--color-fat)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                          </div>
                           <div className="macro-box-label">жири</div>
                         </div>
                         <div className="results-macro-box box-carbs">
-                          <div className="macro-box-val" style={{ color: 'var(--color-carbs)' }}>{scaledBarcodeCarbs}г</div>
+                          <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                            <input 
+                              type="number"
+                              className="macro-box-input"
+                              value={barcodeScannedCarbs}
+                              onChange={(e) => handleBarcodeMacroChange('carbs', e.target.value)}
+                              style={{ color: 'var(--color-carbs)' }}
+                              min="0"
+                              step="0.1"
+                            />
+                            <span style={{ color: 'var(--color-carbs)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                          </div>
                           <div className="macro-box-label">вуглеводи</div>
                         </div>
                       </div>
@@ -1714,7 +2298,7 @@ export default function App() {
                             type="number"
                             className="weight-input"
                             value={barcodeEditedWeight}
-                            onChange={(e) => setBarcodeEditedWeight(e.target.value)}
+                            onChange={(e) => handleBarcodeWeightChange(e.target.value)}
                             min="1"
                             max="5000"
                           />
@@ -1732,10 +2316,32 @@ export default function App() {
                       )}
 
                       <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <button className="btn-primary" onClick={addBarcodeMealToDiary}>
-                          <Check size={18} />
-                          Додати до щоденника
-                        </button>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                          <button className="btn-primary" style={{ flex: 1 }} onClick={addBarcodeMealToDiary}>
+                            <Check size={18} />
+                            Додати до щоденника
+                          </button>
+                          <button 
+                            className={`btn-favorite-toggle ${isFavorite(barcodeResult?.name) ? 'active' : ''}`}
+                            onClick={toggleFavoriteBarcode}
+                            title={isFavorite(barcodeResult?.name) ? "Видалити з обраного" : "Додати в обране"}
+                            style={{
+                              width: '46px',
+                              height: '46px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              borderRadius: '12px',
+                              border: '1px solid rgba(255, 255, 255, 0.15)',
+                              background: isFavorite(barcodeResult?.name) ? 'rgba(255, 184, 0, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                              color: isFavorite(barcodeResult?.name) ? '#ffb800' : 'rgba(255, 255, 255, 0.8)',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                            }}
+                          >
+                            <Star size={20} fill={isFavorite(barcodeResult?.name) ? "#ffb800" : "none"} />
+                          </button>
+                        </div>
                         <button 
                           className="btn-secondary" 
                           onClick={() => {
@@ -1893,27 +2499,44 @@ export default function App() {
 
             {/* Quick Food Selector for Simulation Mode */}
             {scannerMode === 'camera' && scanMode === 'mock' && cameraActive && !scanResult && !isScanning && (
-              <div style={{ background: '#0b0f19', padding: '12px 16px 20px', borderTop: '1px solid var(--border-dark)' }}>
-                <p style={{ fontSize: '11px', color: 'var(--text-dark-secondary)', marginBottom: '8px', fontWeight: 600 }}>
-                  Виберіть страву для тестування симуляції:
-                </p>
-                <div className="demo-food-grid">
-                  {mockFoods.map(food => (
-                    <div 
-                      key={food.id} 
-                      className={`demo-food-item ${selectedDemoFood?.id === food.id ? 'active' : ''}`}
-                      style={{ 
-                        borderColor: selectedDemoFood?.id === food.id ? 'var(--color-calories)' : 'var(--border-dark)',
-                        background: selectedDemoFood?.id === food.id ? 'rgba(16, 185, 129, 0.1)' : 'rgba(255,255,255,0.02)'
-                      }}
-                      onClick={() => setSelectedDemoFood(food)}
-                    >
-                      <span>{food.icon}</span>
-                      <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                        {food.name}
-                      </span>
-                    </div>
-                  ))}
+              <div style={{ background: '#090d16', padding: '16px 12px 24px', borderTop: '1px solid var(--border-dark)', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', padding: '0 4px' }}>
+                  <p style={{ fontSize: '12px', color: 'var(--text-dark-secondary)', fontWeight: 600, margin: 0 }}>
+                    Оберіть страву для симуляції сканування:
+                  </p>
+                  {selectedDemoFood && (
+                    <span style={{ fontSize: '11px', color: 'var(--color-calories)', fontWeight: 500 }}>
+                      Обрано: {selectedDemoFood.name}
+                    </span>
+                  )}
+                </div>
+                
+                <div className="demo-food-tray">
+                  {mockFoods.map(food => {
+                    const isSelected = selectedDemoFood?.id === food.id;
+                    return (
+                      <div 
+                        key={food.id} 
+                        className={`demo-food-card ${isSelected ? 'active' : ''}`}
+                        onClick={() => setSelectedDemoFood(food)}
+                        style={{
+                          backgroundImage: `linear-gradient(to top, rgba(9, 13, 22, 0.95) 0%, rgba(9, 13, 22, 0.4) 60%, rgba(9, 13, 22, 0.1) 100%), url(${food.image})`
+                        }}
+                      >
+                        <div className="demo-food-card-icon">{food.icon}</div>
+                        
+                        <div className="demo-food-card-content">
+                          <h4 className="demo-food-card-title">{food.name}</h4>
+                          <div className="demo-food-card-nutrients">
+                            <span className="demo-food-kcal">{food.calories} ккал</span>
+                            <span className="demo-food-macros">
+                              Б:{food.protein}г • Ж:{food.fat}г • В:{food.carbs}г
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -2120,8 +2743,56 @@ export default function App() {
                               </div>
                               <div className="meal-calories-details">
                                 <span className="meal-kcal">{meal.calories} ккал</span>
-                                <span className="meal-macros">Б:{meal.protein}г Ж:{meal.fat}г В:{meal.carbs}г</span>
+                                <span className="meal-macros" style={{ display: 'flex', alignItems: 'center', gap: '3px', flexWrap: 'wrap', marginTop: '3px' }}>
+                                  <span>Б:</span>
+                                  <input 
+                                    type="number"
+                                    value={meal.protein}
+                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
+                                    className="meal-macro-inline-input"
+                                    min="0"
+                                    step="0.1"
+                                  />
+                                  <span>г Ж:</span>
+                                  <input 
+                                    type="number"
+                                    value={meal.fat}
+                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
+                                    className="meal-macro-inline-input"
+                                    min="0"
+                                    step="0.1"
+                                  />
+                                  <span>г В:</span>
+                                  <input 
+                                    type="number"
+                                    value={meal.carbs}
+                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
+                                    className="meal-macro-inline-input"
+                                    min="0"
+                                    step="0.1"
+                                  />
+                                  <span>г</span>
+                                </span>
                               </div>
+                              <button 
+                                className={`meal-favorite-btn ${isFavorite(meal.name) ? 'active' : ''}`} 
+                                onClick={() => toggleFavoriteMeal(meal)} 
+                                title={isFavorite(meal.name) ? "Видалити з обраного" : "Додати в обране"}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  padding: '4px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color: isFavorite(meal.name) ? '#ffb800' : 'rgba(255, 255, 255, 0.4)',
+                                  transition: 'color 0.2s ease',
+                                  marginRight: '6px'
+                                }}
+                              >
+                                <Star size={16} fill={isFavorite(meal.name) ? "#ffb800" : "none"} />
+                              </button>
                               <button className="meal-delete-btn" onClick={() => deleteMeal(meal.id)} title="Видалити">
                                 <Trash2 size={16} />
                               </button>
@@ -2209,24 +2880,99 @@ export default function App() {
                 </div>
 
                 {/* Direct override option for advanced users */}
-                <div className="settings-row" style={{ marginTop: '10px' }}>
-                  <span className="settings-label">Власне коригування калорій (ккал):</span>
-                  <input 
-                    type="number" 
-                    className="settings-input" 
-                    value={profile.targetCalories} 
-                    onChange={(e) => {
-                      const cals = Number(e.target.value) || 2000;
-                      // Також пропорційно скоригуємо макроси (30/25/45)
-                      setProfile(prev => ({
-                        ...prev,
-                        targetCalories: cals,
-                        targetProtein: Math.round(cals * 0.3 / 4),
-                        targetFat: Math.round(cals * 0.25 / 9),
-                        targetCarbs: Math.round(cals * 0.45 / 4)
-                      }));
-                    }}
-                  />
+                <div style={{ marginTop: '14px', borderTop: '1px solid var(--border-dark)', paddingTop: '14px' }}>
+                  <span className="settings-label" style={{ display: 'block', marginBottom: '10px', fontWeight: 600 }}>
+                    Власне коригування цілей КБЖВ:
+                  </span>
+                  
+                  <div className="settings-row" style={{ marginBottom: '12px' }}>
+                    <span className="settings-label">Калорії (ккал):</span>
+                    <input 
+                      type="number" 
+                      className="settings-input" 
+                      value={profile.targetCalories} 
+                      onChange={(e) => {
+                        const cals = Math.max(0, Number(e.target.value) || 0);
+                        // Також пропорційно скоригуємо макроси (30/25/45)
+                        setProfile(prev => ({
+                          ...prev,
+                          targetCalories: cals,
+                          targetProtein: Math.round(cals * 0.3 / 4),
+                          targetFat: Math.round(cals * 0.25 / 9),
+                          targetCarbs: Math.round(cals * 0.45 / 4)
+                        }));
+                      }}
+                    />
+                  </div>
+
+                  <div className="settings-macros-calc" style={{ marginTop: '10px', gap: '8px' }}>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--color-protein)', fontWeight: 600 }}>Білки (г)</span>
+                      <input 
+                        type="number" 
+                        className="settings-input" 
+                        style={{ width: '100%', fontSize: '13px', padding: '6px', textAlign: 'center' }}
+                        value={profile.targetProtein} 
+                        onChange={(e) => {
+                          const p = Math.max(0, Number(e.target.value) || 0);
+                          setProfile(prev => {
+                            const newProt = p;
+                            const newFat = prev.targetFat;
+                            const newCarbs = Math.max(0, Math.round((prev.targetCalories - newProt * 4 - newFat * 9) / 4));
+                            return {
+                              ...prev,
+                              targetProtein: newProt,
+                              targetCarbs: newCarbs
+                            };
+                          });
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--color-fat)', fontWeight: 600 }}>Жири (г)</span>
+                      <input 
+                        type="number" 
+                        className="settings-input" 
+                        style={{ width: '100%', fontSize: '13px', padding: '6px', textAlign: 'center' }}
+                        value={profile.targetFat} 
+                        onChange={(e) => {
+                          const f = Math.max(0, Number(e.target.value) || 0);
+                          setProfile(prev => {
+                            const newProt = prev.targetProtein;
+                            const newFat = f;
+                            const newCarbs = Math.max(0, Math.round((prev.targetCalories - newProt * 4 - newFat * 9) / 4));
+                            return {
+                              ...prev,
+                              targetFat: newFat,
+                              targetCarbs: newCarbs
+                            };
+                          });
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--color-carbs)', fontWeight: 600 }}>Вуглеводи (г)</span>
+                      <input 
+                        type="number" 
+                        className="settings-input" 
+                        style={{ width: '100%', fontSize: '13px', padding: '6px', textAlign: 'center' }}
+                        value={profile.targetCarbs} 
+                        onChange={(e) => {
+                          const c = Math.max(0, Number(e.target.value) || 0);
+                          setProfile(prev => {
+                            const newProt = prev.targetProtein;
+                            const newCarbs = c;
+                            const newFat = Math.max(0, Math.round((prev.targetCalories - newProt * 4 - newCarbs * 4) / 9));
+                            return {
+                              ...prev,
+                              targetCarbs: newCarbs,
+                              targetFat: newFat
+                            };
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2298,6 +3044,52 @@ export default function App() {
                       <span className="settings-info-text">
                         Ваш API-ключ зберігається локально на вашому пристрої у безпечному сховищі браузера та надсилається лише напряму до Google API.
                       </span>
+                      {(!apiKey || apiKey.trim() === '' || apiKey.trim() === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') && (
+                        <div style={{
+                          marginTop: '8px',
+                          padding: '10px',
+                          borderRadius: '8px',
+                          background: 'rgba(239, 68, 68, 0.1)',
+                          border: '1px solid rgba(239, 68, 68, 0.2)',
+                          color: '#f87171',
+                          fontSize: '12px',
+                          lineHeight: '1.4'
+                        }}>
+                          <strong>⚠️ Увага:</strong> Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Для роботи ШІ-сканера, будь ласка, отримайте свій власний безкоштовний ключ на <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" style={{ color: '#f87171', textDecoration: 'underline', fontWeight: 600 }}>Google AI Studio</a> та введіть його вище.
+                          <div style={{ marginTop: '8px' }}>
+                            <button
+                              type="button"
+                              style={{
+                                width: '100%',
+                                padding: '6px 12px',
+                                fontSize: '11px',
+                                background: 'rgba(255, 255, 255, 0.1)',
+                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                color: '#fff',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontWeight: '600',
+                                transition: 'all 0.2s'
+                              }}
+                              onClick={() => {
+                                setScanMode('mock');
+                                localStorage.setItem('nutrisnap_scanmode', 'mock');
+                                showToast("Режим сканування змінено на Симуляцію", "info");
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)';
+                                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.25)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+                                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                              }}
+                            >
+                              Перемкнути на Симуляцію (Локальна база)
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
@@ -2401,6 +3193,20 @@ export default function App() {
             <span>Налаштування</span>
           </button>
         </nav>
+      )}
+      {/* Toast Notification Container */}
+      {toast && (
+        <div className={`toast-notification toast-${toast.type}`}>
+          <div className="toast-content">
+            <span className="toast-icon">
+              {toast.type === 'success' && <Check size={16} style={{ color: '#10b981' }} />}
+              {toast.type === 'error' && <AlertCircle size={16} style={{ color: '#ef4444' }} />}
+              {toast.type === 'info' && <AlertCircle size={16} style={{ color: '#3b82f6' }} />}
+              {toast.type === 'warning' && <AlertCircle size={16} style={{ color: '#f59e0b' }} />}
+            </span>
+            <span className="toast-message">{toast.message}</span>
+          </div>
+        </div>
       )}
 
     </div>

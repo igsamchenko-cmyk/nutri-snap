@@ -1,20 +1,40 @@
 /**
  * Сервіс для аналізу фотографій їжі через Gemini API
  */
+
+// Допоміжна функція для обробки помилок Gemini API
+function handleGeminiError(response, errorData) {
+  const apiErrorMessage = errorData.error?.message || "";
+  console.error("Gemini API Error details:", errorData);
+  
+  if (response.status === 403 || apiErrorMessage.toLowerCase().includes("api key")) {
+    return new Error("Невірний API-ключ або обмежений доступ. Будь ласка, перевірте правильність вашого Gemini API-ключа в налаштуваннях.");
+  } else if (response.status === 400) {
+    return new Error(apiErrorMessage || "Невірний запит до API. Перевірте формат або модель.");
+  } else {
+    return new Error(apiErrorMessage || `Помилка API Gemini (Код: ${response.status})`);
+  }
+}
+
 export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2.5-flash') {
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
+  }
+
+  const trimmedKey = apiKey.trim();
+  if (trimmedKey === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') {
+    throw new Error("Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
   }
 
   // Очищення base64 префіксу (наприклад, data:image/jpeg;base64,) якщо він є
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
 
   // Використовуємо обрану модель Gemini
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
 
   const promptText = `
     Проаналізуй це фото їжі. Визнач головну страву або продукт харчування на знімку.
-    Оціни приблизну вагу страви в грамах та вирахуй харчову цінність:
+    Оціни приблизну вагу страви в грамах та вирахуй харчочу цінність:
     калорійність (ккал), білки (г), жири (г) та вуглеводи (г).
     
     Ти ПОВИНЕН повернути відповідь виключно у форматі JSON українською мовою з наступними полями:
@@ -60,15 +80,7 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      console.error("Gemini API Error:", errorData);
-      
-      if (response.status === 400) {
-        throw new Error("Невірний запит до API. Перевірте формат або модель.");
-      } else if (response.status === 403) {
-        throw new Error("Невірний API-ключ або обмежений доступ. Перевірте ключ у налаштуваннях.");
-      } else {
-        throw new Error(errorData.error?.message || `Помилка API Gemini (Код: ${response.status})`);
-      }
+      throw handleGeminiError(response, errorData);
     }
 
     const data = await response.json();
@@ -100,8 +112,13 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
 
+  const trimmedKey = apiKey.trim();
+  if (trimmedKey === 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4') {
+    throw new Error("Вбудований демо-ключ деактивовано компанією Google з міркувань безпеки. Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+  }
+
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
 
   const promptText = `
     Проаналізуй це зображення штрих-коду продукту.
@@ -142,7 +159,7 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `Помилка API Gemini (Код: ${response.status})`);
+      throw handleGeminiError(response, errorData);
     }
 
     const data = await response.json();
@@ -158,4 +175,3 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
     throw error;
   }
 }
-
