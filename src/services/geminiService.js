@@ -1,7 +1,7 @@
 /**
  * Сервіс для аналізу фотографій їжі через Gemini API
  */
-export async function analyzeFoodImage(base64Data, apiKey) {
+export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2.5-flash') {
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
@@ -9,8 +9,8 @@ export async function analyzeFoodImage(base64Data, apiKey) {
   // Очищення base64 префіксу (наприклад, data:image/jpeg;base64,) якщо він є
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
 
-  // Використовуємо gemini-2.5-flash як найшвидшу та найефективнішу модель для зору (Vision)
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  // Використовуємо обрану модель Gemini
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
   const promptText = `
     Проаналізуй це фото їжі. Визнач головну страву або продукт харчування на знімку.
@@ -95,13 +95,13 @@ export async function analyzeFoodImage(base64Data, apiKey) {
 /**
  * Сервіс для розпізнавання штрих-коду з фотографії через Gemini API
  */
-export async function detectBarcodeFromImage(base64Data, apiKey) {
+export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'gemini-2.5-flash') {
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
 
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
   const promptText = `
     Проаналізуй це зображення штрих-коду продукту.

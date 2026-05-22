@@ -1712,3 +1712,77 @@ body.light-mode .category-select {
 .category-select:focus {
   border-color: var(--color-accent);
 }
+
+/* Backup and restore styles */
+.backup-btn-group {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.backup-btn-export, .backup-btn-import {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  font-family: var(--font-body);
+}
+
+.backup-btn-export {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.backup-btn-export:hover {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: rgba(16, 185, 129, 0.5);
+  transform: translateY(-2px);
+}
+
+.backup-btn-export:active {
+  transform: translateY(0);
+}
+
+.backup-btn-import {
+  background: rgba(14, 165, 233, 0.15);
+  color: #0ea5e9;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+}
+
+.backup-btn-import:hover {
+  background: rgba(14, 165, 233, 0.25);
+  border-color: rgba(14, 165, 233, 0.5);
+  transform: translateY(-2px);
+}
+
+.backup-btn-import:active {
+  transform: translateY(0);
+}
+
+body.light-mode .backup-btn-export {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.2);
+}
+
+body.light-mode .backup-btn-export:hover {
+  background: rgba(16, 185, 129, 0.2);
+}
+
+body.light-mode .backup-btn-import {
+  background: rgba(14, 165, 233, 0.1);
+  border-color: rgba(14, 165, 233, 0.2);
+}
+
+body.light-mode .backup-btn-import:hover {
+  background: rgba(14, 165, 233, 0.2);
+}

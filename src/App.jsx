@@ -20,7 +20,9 @@ import {
   Sparkles,
   AlertCircle,
   User,
-  QrCode
+  QrCode,
+  Download,
+  Database
 } from 'lucide-react';
 import { mockFoods } from './data/mockFood';
 import { analyzeFoodImage, detectBarcodeFromImage } from './services/geminiService';
@@ -108,6 +110,13 @@ export default function App() {
       return localStorage.getItem('nutrisnap_scanmode') || 'gemini';
     } catch (e) {
       return 'gemini';
+    }
+  });
+  const [geminiModel, setGeminiModel] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_geminimodel') || 'gemini-2.5-flash';
+    } catch (e) {
+      return 'gemini-2.5-flash';
     }
   });
 
@@ -256,6 +265,10 @@ export default function App() {
   }, [scanMode]);
 
   useEffect(() => {
+    localStorage.setItem('nutrisnap_geminimodel', geminiModel);
+  }, [geminiModel]);
+
+  useEffect(() => {
     localStorage.setItem('nutrisnap_theme', theme);
     const bodyClass = document.body.classList;
     if (theme === 'light') {
@@ -397,7 +410,7 @@ export default function App() {
     try {
       if (scanMode === 'gemini' && apiKey) {
         // Запит до реального Gemini API
-        const result = await analyzeFoodImage(imageDataBase64, apiKey);
+        const result = await analyzeFoodImage(imageDataBase64, apiKey, geminiModel);
         setScanResult(result);
         setEditedWeight(Number(result.weight) || 200);
       } else {
@@ -585,7 +598,7 @@ export default function App() {
     try {
       let barcodeVal = null;
       if (scanMode === 'gemini' && apiKey) {
-        barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey);
+        barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey, geminiModel);
       } else {
         await new Promise(resolve => setTimeout(resolve, 1500));
         const mockBarcodes = ["8000500023976", "5449000000996", "5900311000361"];
@@ -854,6 +867,91 @@ export default function App() {
     }
     
     setProfile(updated);
+  };
+
+  // Експорт та імпорт даних користувача (Бекапи)
+  const exportUserData = () => {
+    try {
+      const exportData = {
+        version: "1.0.0",
+        exportedAt: new Date().toISOString(),
+        meals,
+        waterIntake,
+        profile,
+        apiKey,
+        scanMode,
+        geminiModel,
+        theme
+      };
+      
+      const jsonString = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      const dateStr = getTodayString().replace(/-/g, '');
+      link.href = url;
+      link.download = `nutrisnap_backup_${dateStr}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Помилка експорту даних:", error);
+      alert("Не вдалося експортувати дані: " + error.message);
+    }
+  };
+
+  const importUserData = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    if (!window.confirm("Увага! Імпорт резервної копії повністю замінить ваші поточні дані (історію страв, споживання води, налаштування та профіль). Бажаєте продовжити?")) {
+      e.target.value = '';
+      return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const importedData = JSON.parse(event.target.result);
+        
+        // Валідація структури
+        if (!importedData || typeof importedData !== 'object') {
+          throw new Error("Невірний формат файлу. Очікувався об'єкт JSON.");
+        }
+        
+        // Відновимо дані
+        if (importedData.meals && Array.isArray(importedData.meals)) {
+          setMeals(importedData.meals);
+        }
+        if (importedData.waterIntake && typeof importedData.waterIntake === 'object') {
+          setWaterIntake(importedData.waterIntake);
+        }
+        if (importedData.profile && typeof importedData.profile === 'object') {
+          setProfile(prev => ({ ...prev, ...importedData.profile }));
+        }
+        if (importedData.apiKey !== undefined) {
+          setApiKey(importedData.apiKey);
+        }
+        if (importedData.scanMode !== undefined) {
+          setScanMode(importedData.scanMode);
+        }
+        if (importedData.geminiModel !== undefined) {
+          setGeminiModel(importedData.geminiModel);
+        }
+        if (importedData.theme !== undefined) {
+          setTheme(importedData.theme);
+        }
+        
+        alert("Дані успішно імпортовано! Додаток оновлено.");
+        e.target.value = '';
+      } catch (error) {
+        console.error("Помилка імпорту даних:", error);
+        alert("Не вдалося імпортувати дані. Перевірте, чи файл правильного формату та чи він не пошкоджений.\nДеталі: " + error.message);
+      }
+    };
+    reader.readAsText(file);
   };
 
   // Розрахунок прогресу для SVG
@@ -2109,32 +2207,83 @@ export default function App() {
                 </div>
 
                 {scanMode === 'gemini' && (
-                  <div className="settings-row" style={{ animation: 'slide-up-sheet 0.2s ease-out' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="settings-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Key size={14} /> Gemini API Ключ:
-                      </span>
-                      <a 
-                        href="https://aistudio.google.com/" 
-                        target="_blank" 
-                        rel="noreferrer"
-                        style={{ fontSize: '11px', color: 'var(--color-protein)', textDecoration: 'none' }}
+                  <>
+                    <div className="settings-row" style={{ animation: 'slide-up-sheet 0.2s ease-out' }}>
+                      <span className="settings-label">Модель Gemini API:</span>
+                      <select 
+                        className="settings-input settings-select"
+                        value={geminiModel}
+                        onChange={(e) => setGeminiModel(e.target.value)}
                       >
-                        Отримати безкоштовно
-                      </a>
+                        <option value="gemini-2.5-flash">Gemini 2.5 Flash (Швидко)</option>
+                        <option value="gemini-2.5-pro">Gemini 2.5 Pro (Точно)</option>
+                      </select>
                     </div>
-                    <input 
-                      type="password"
-                      className="settings-input"
-                      placeholder="AIzaSy..."
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                    />
-                    <span className="settings-info-text">
-                      Ваш API-ключ зберігається локально на вашому пристрої у безпечному сховищі браузера та надсилається лише напряму до Google API.
-                    </span>
-                  </div>
+
+                    <div className="settings-row" style={{ animation: 'slide-up-sheet 0.2s ease-out' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="settings-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Key size={14} /> Gemini API Ключ:
+                        </span>
+                        <a 
+                          href="https://aistudio.google.com/" 
+                          target="_blank" 
+                          rel="noreferrer"
+                          style={{ fontSize: '11px', color: 'var(--color-protein)', textDecoration: 'none' }}
+                        >
+                          Отримати безкоштовно
+                        </a>
+                      </div>
+                      <input 
+                        type="password"
+                        className="settings-input"
+                        placeholder="AIzaSy..."
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                      />
+                      <span className="settings-info-text">
+                        Ваш API-ключ зберігається локально на вашому пристрої у безпечному сховищі браузера та надсилається лише напряму до Google API.
+                      </span>
+                    </div>
+                  </>
                 )}
+              </div>
+            </div>
+
+            {/* Backup Configuration Card */}
+            <div className="glass-card" style={{ marginTop: '16px' }}>
+              <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Database size={18} style={{ color: 'var(--color-carbs)' }} />
+                Резервне копіювання даних
+              </h3>
+              
+              <div className="settings-group">
+                <p style={{ fontSize: '12px', color: 'var(--text-dark-muted)', marginBottom: '8px', lineHeight: '1.4' }}>
+                  Ви можете зберегти всі свої дані (профіль, історію споживання їжі та води, налаштування) у файл та згодом відновити їх на іншому пристрої.
+                </p>
+                
+                <div className="backup-btn-group">
+                  <button 
+                    className="backup-btn-export" 
+                    onClick={exportUserData}
+                  >
+                    <Download size={16} />
+                    Зберегти копію
+                  </button>
+                  
+                  <label 
+                    className="backup-btn-import"
+                  >
+                    <Upload size={16} />
+                    Відновити з файлу
+                    <input 
+                      type="file" 
+                      accept=".json" 
+                      onChange={importUserData} 
+                      style={{ display: 'none' }} 
+                    />
+                  </label>
+                </div>
               </div>
             </div>
 
