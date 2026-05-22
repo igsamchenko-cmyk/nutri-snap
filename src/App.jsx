@@ -3134,9 +3134,46 @@ export default function App() {
             </div>
 
             {/* Technical Information / Credits */}
-            <div style={{ textAlign: 'center', padding: '10px 0', fontSize: '11px', color: 'var(--text-dark-muted)' }}>
-              <p>NutriSnap v1.0.0 PWA Prototype</p>
-              <p style={{ marginTop: '4px' }}>Працює локально на вашому пристрої.</p>
+            <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+              <p>NutriSnap v1.1.0 (Оновлено: Safe Area + Top Toasts)</p>
+              <p>Працює локально на вашому пристрої.</p>
+              <button
+                onClick={() => {
+                  if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.getRegistrations().then((registrations) => {
+                      for (let registration of registrations) {
+                        registration.unregister();
+                      }
+                      if ('caches' in window) {
+                        caches.keys().then((names) => {
+                          Promise.all(names.map(name => caches.delete(name))).then(() => {
+                            window.location.reload(true);
+                          });
+                        });
+                      } else {
+                        window.location.reload(true);
+                      }
+                    });
+                  } else {
+                    window.location.reload(true);
+                  }
+                }}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  color: '#f87171',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  fontSize: '11px',
+                  cursor: 'pointer',
+                  marginTop: '4px',
+                  transition: 'background 0.2s'
+                }}
+                onMouseOver={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.2)'}
+                onMouseOut={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.1)'}
+              >
+                Очистити кеш та оновити додаток
+              </button>
             </div>
           </div>
         )}
