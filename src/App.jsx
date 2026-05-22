@@ -205,7 +205,7 @@ export default function App() {
           fat: Number(scannedFat) || 0,
           carbs: Number(scannedCarbs) || 0,
           weight: Number(editedWeight) || 100,
-          image: selectedDemoFood?.image || ''
+          image: scanResult?.image || ''
         }];
       }
     });
@@ -342,7 +342,6 @@ export default function App() {
   const [scannedFat, setScannedFat] = useState(0);
   const [scannedCarbs, setScannedCarbs] = useState(0);
   const [scannedCalories, setScannedCalories] = useState(0);
-  const [selectedDemoFood, setSelectedDemoFood] = useState(null);
   const [cameraStream, setCameraStream] = useState(null);
 
   // Ghost click protection state
@@ -493,7 +492,6 @@ export default function App() {
       stopCamera();
       // Очищуємо результати пошуку штрих-кодів, якщо виходимо зі сканера повністю
       setScanResult(null);
-      setSelectedDemoFood(null);
       setBarcodeResult(null);
       setBarcodeError(null);
       setBarcodeInput('');
@@ -620,12 +618,8 @@ export default function App() {
         // Демо-режим (симуляція аналізу 1.5 сек)
         await new Promise(resolve => setTimeout(resolve, 1500));
         
-        let selectedFood = selectedDemoFood;
-        // Якщо страву не вибрано вручну, беремо рандомну з бази
-        if (!selectedFood) {
-          const randomIndex = Math.floor(Math.random() * mockFoods.length);
-          selectedFood = mockFoods[randomIndex];
-        }
+        const randomIndex = Math.floor(Math.random() * mockFoods.length);
+        const selectedFood = mockFoods[randomIndex];
         
         const mockResult = {
           name: selectedFood.name,
@@ -635,7 +629,8 @@ export default function App() {
           carbs: selectedFood.carbs,
           weight: selectedFood.weight,
           confidence: selectedFood.confidence,
-          ingredients: selectedFood.ingredients
+          ingredients: selectedFood.ingredients,
+          image: selectedFood.image
         };
         setScanResult(mockResult);
         setEditedWeight(Number(mockResult.weight) || 200);
@@ -834,7 +829,6 @@ export default function App() {
     showToast(`Страву "${scanResult.name}" додано до щоденника!`, "success");
     
     setScanResult(null);
-    setSelectedDemoFood(null);
     setActiveTab('dashboard');
   };
 
@@ -1880,7 +1874,7 @@ export default function App() {
                       
                       {scanMode === 'mock' && (
                         <div style={{ marginTop: '20px', fontSize: '11px', color: 'var(--text-dark-secondary)', background: 'rgba(255,255,255,0.02)', padding: '8px 16px', borderRadius: '12px', border: '1px solid var(--border-dark)' }}>
-                          💡 Режим симуляції. Виберіть страву зі списку внизу та натисніть зелену кнопку вище для тесту!
+                          💡 Режим симуляції. Натисніть кнопку вище для імітації сканування.
                         </div>
                       )}
                     </div>
@@ -1888,7 +1882,7 @@ export default function App() {
 
                   {cameraActive && !isScanning && !scanResult && (
                     <div className="scanner-overlay">
-                      <div style={{ alignSelf: 'center', background: 'rgba(0,0,0,0.6)', padding: '6px 12px', borderRadius: '12px', fontSize: '12px', color: 'white', pointerEvents: 'auto' }}>
+                      <div className="scanner-instruction-label">
                         Наведіть камеру на страву
                       </div>
                       
@@ -1898,13 +1892,13 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignSelf: 'center', pointerEvents: 'auto' }}>
-                        {scanMode === 'mock' && (
-                          <div className="demo-scanner-hint">
-                            💡 Режим Симуляції. Виберіть страву нижче, потім натисніть білу кнопку знімка для імітації сканування.
+                      {scanMode === 'mock' && (
+                        <div className="scanner-hint-container">
+                          <div className="demo-scanner-hint" style={{ margin: 0 }}>
+                            💡 Режим Симуляції. Натисніть кнопку знімка внизу для імітації розпізнавання.
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -2071,7 +2065,6 @@ export default function App() {
                           className="btn-secondary" 
                           onClick={() => {
                             setScanResult(null);
-                            setSelectedDemoFood(null);
                           }}
                         >
                           Сканувати знову
@@ -2169,7 +2162,7 @@ export default function App() {
 
                   {cameraActive && !isBarcodeScanning && !barcodeLoading && !barcodeResult && (
                     <div className="scanner-overlay">
-                      <div style={{ alignSelf: 'center', background: 'rgba(0,0,0,0.6)', padding: '6px 12px', borderRadius: '12px', fontSize: '12px', color: 'white', pointerEvents: 'auto' }}>
+                      <div className="scanner-instruction-label">
                         Наведіть камеру на штрих-код продукту
                       </div>
                       
@@ -2179,13 +2172,13 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignSelf: 'center', pointerEvents: 'auto' }}>
-                        {scanMode === 'mock' && (
-                          <div className="demo-scanner-hint">
-                            💡 Режим Симуляції. Натисніть червону кнопку затвора внизу для імітації розпізнавання.
+                      {scanMode === 'mock' && (
+                        <div className="scanner-hint-container">
+                          <div className="demo-scanner-hint" style={{ margin: 0 }}>
+                            💡 Режим Симуляції. Натисніть кнопку затвора внизу для імітації розпізнавання.
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -2507,50 +2500,6 @@ export default function App() {
                   >
                     <Brain size={20} />
                   </button>
-                </div>
-              </div>
-            )}
-
-            {/* Quick Food Selector for Simulation Mode */}
-            {scannerMode === 'camera' && scanMode === 'mock' && cameraActive && !scanResult && !isScanning && (
-              <div style={{ background: '#090d16', padding: '16px 12px calc(16px + env(safe-area-inset-bottom, 0px))', borderTop: '1px solid var(--border-dark)', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', padding: '0 4px' }}>
-                  <p style={{ fontSize: '12px', color: 'var(--text-dark-secondary)', fontWeight: 600, margin: 0 }}>
-                    Оберіть страву для симуляції сканування:
-                  </p>
-                  {selectedDemoFood && (
-                    <span style={{ fontSize: '11px', color: 'var(--color-calories)', fontWeight: 500 }}>
-                      Обрано: {selectedDemoFood.name}
-                    </span>
-                  )}
-                </div>
-                
-                <div className="demo-food-tray">
-                  {mockFoods.map(food => {
-                    const isSelected = selectedDemoFood?.id === food.id;
-                    return (
-                      <div 
-                        key={food.id} 
-                        className={`demo-food-card ${isSelected ? 'active' : ''}`}
-                        onClick={() => setSelectedDemoFood(food)}
-                        style={{
-                          backgroundImage: `linear-gradient(to top, rgba(9, 13, 22, 0.95) 0%, rgba(9, 13, 22, 0.4) 60%, rgba(9, 13, 22, 0.1) 100%), url(${food.image})`
-                        }}
-                      >
-                        <div className="demo-food-card-icon">{food.icon}</div>
-                        
-                        <div className="demo-food-card-content">
-                          <h4 className="demo-food-card-title">{food.name}</h4>
-                          <div className="demo-food-card-nutrients">
-                            <span className="demo-food-kcal">{food.calories} ккал</span>
-                            <span className="demo-food-macros">
-                              Б:{food.protein}г • Ж:{food.fat}г • В:{food.carbs}г
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
                 </div>
               </div>
             )}
