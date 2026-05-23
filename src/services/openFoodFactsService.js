@@ -23,12 +23,12 @@ export async function getProductByBarcode(barcode) {
   }
 
   // Запит до API Open Food Facts
-  const url = `https://world.openfoodfacts.org/api/v2/product/${cleanBarcode}.json`;
+  const url = `https://world.openfoodfacts.org/api/v2/product/${cleanBarcode}.json?app_name=NutriSnap`;
   
   const response = await fetch(url);
 
   if (!response.ok) {
-    throw new Error("Не вдалося підключитися до бази даних продуктов. Спробуйте пізніше.");
+    throw new Error("Не вдалося підключитися до бази даних продуктів. Спробуйте пізніше.");
   }
   
   const data = await response.json();
