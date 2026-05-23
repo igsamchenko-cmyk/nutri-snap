@@ -25,11 +25,7 @@ export async function getProductByBarcode(barcode) {
   // Запит до API Open Food Facts
   const url = `https://world.openfoodfacts.org/api/v2/product/${cleanBarcode}.json`;
   
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'NutriSnap - Web/1.1.0 (nutrisnap.app.ua@outlook.com)'
-    }
-  });
+  const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error("Не вдалося підключитися до бази даних продуктов. Спробуйте пізніше.");
@@ -99,11 +95,7 @@ export async function searchProductsByName(query) {
   const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1&page_size=24&cc=ua&lc=uk`;
   
   try {
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'NutriSnap - Web/1.1.0 (nutrisnap.app.ua@outlook.com)'
-      }
-    });
+    const response = await fetch(url);
 
     if (!response.ok) {
       return [];

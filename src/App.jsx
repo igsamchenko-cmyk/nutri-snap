@@ -1131,7 +1131,13 @@ export default function App() {
         food.brand.includes('Чумак') ||
         food.brand.includes('Верес') ||
         food.brand.includes('Рошен') ||
-        food.brand.includes('Світоч')
+        food.brand.includes('Світоч') ||
+        food.brand.includes('Agrola') ||
+        food.brand.includes('Кулиничі') ||
+        food.brand.includes('Київхліб') ||
+        food.brand.includes('Алан') ||
+        food.brand.includes('Ятрань') ||
+        food.brand.includes('Глобино')
       );
       return isSupermarket;
     }
