@@ -98,6 +98,7 @@ export default function App() {
   const [isSearchingExternal, setIsSearchingExternal] = useState(false);
   const [isAIEstimating, setIsAIEstimating] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isNativeScannerSupported] = useState(() => 'BarcodeDetector' in window);
   
   // Дані страв та води (ініціалізація з localStorage)
   const [meals, setMeals] = useState(() => {
@@ -871,6 +872,79 @@ export default function App() {
     const base64Data = canvas.toDataURL('image/jpeg');
     triggerBarcodeScan(base64Data);
   };
+
+  // Прямий пошук за розпізнаним штрих-кодом без необхідності фотографування через ШІ
+  const triggerBarcodeSearchDirect = async (barcodeVal) => {
+    if (!barcodeVal) return;
+    setBarcodeInput(barcodeVal);
+    setBarcodeLoading(true);
+    setBarcodeError(null);
+    setBarcodeResult(null);
+    setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
+    
+    try {
+      const product = await getProductByBarcode(barcodeVal);
+      setBarcodeResult(product);
+      const w = product.weight || 100;
+      setBarcodeEditedWeight(w);
+      const scale = w / 100;
+      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
+      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
+      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
+      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+      
+      // Вібрація для зворотного зв'язку при успішному зчитуванні
+      if (navigator.vibrate) {
+        navigator.vibrate(150);
+      }
+      showToast("Штрих-код успішно розпізнано!", "success");
+    } catch (err) {
+      console.error("Direct barcode search error:", err);
+      setBarcodeError(err.message || "Не вдалося знайти товар за цим штрих-кодом.");
+    } finally {
+      setBarcodeLoading(false);
+    }
+  };
+
+  // Автоматичне сканування штрих-коду за допомогою вбудованого BarcodeDetector API (якщо підтримується браузером)
+  useEffect(() => {
+    if (activeTab !== 'scanner' || scannerMode !== 'barcode' || !cameraActive || barcodeResult || barcodeLoading || isBarcodeScanning) {
+      return;
+    }
+
+    if (!isNativeScannerSupported) {
+      return;
+    }
+
+    let intervalId = null;
+    try {
+      const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'];
+      const detector = new window.BarcodeDetector({ formats });
+
+      intervalId = setInterval(async () => {
+        const video = videoRef.current;
+        if (!video || video.readyState !== 4) return;
+
+        try {
+          const barcodes = await detector.detect(video);
+          if (barcodes && barcodes.length > 0) {
+            const code = barcodes[0].rawValue;
+            console.log("Natively detected barcode:", code);
+            clearInterval(intervalId);
+            triggerBarcodeSearchDirect(code);
+          }
+        } catch (detectErr) {
+          console.error("Barcode detection loop error:", detectErr);
+        }
+      }, 400);
+    } catch (e) {
+      console.error("Failed to initialize BarcodeDetector:", e);
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [activeTab, scannerMode, cameraActive, barcodeResult, barcodeLoading, isBarcodeScanning, isNativeScannerSupported]);
 
   // Обробка завантаження файлу зображення штрих-коду
   const handleBarcodeFileUpload = async (e) => {
@@ -2266,7 +2340,9 @@ export default function App() {
                   {cameraActive && !isBarcodeScanning && !barcodeLoading && !barcodeResult && (
                     <div className="scanner-overlay">
                       <div className="scanner-instruction-label">
-                        Наведіть камеру на штрих-код продукту
+                        {isNativeScannerSupported 
+                          ? "Наведіть камеру на штрих-код (розпізнається автоматично)" 
+                          : "Наведіть камеру на штрих-код та натисніть кнопку"}
                       </div>
                       
                       <div className="barcode-scanner-box">
