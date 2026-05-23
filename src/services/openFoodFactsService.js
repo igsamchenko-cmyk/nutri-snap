@@ -2,6 +2,18 @@
  * Сервіс для роботи з відкритим API Open Food Facts (український та світовий сегмент)
  */
 
+function cleanText(text) {
+  if (!text) return "";
+  return text
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export async function getProductByBarcode(barcode) {
   const cleanBarcode = barcode.trim();
   
@@ -20,7 +32,7 @@ export async function getProductByBarcode(barcode) {
   });
 
   if (!response.ok) {
-    throw new Error("Не вдалося підключитися до бази даних продуктів. Спробуйте пізніше.");
+    throw new Error("Не вдалося підключитися до бази даних продуктов. Спробуйте пізніше.");
   }
   
   const data = await response.json();
@@ -32,8 +44,11 @@ export async function getProductByBarcode(barcode) {
   const p = data.product;
   
   // Спроба отримати назву українською, інакше англійською або загальною
-  const name = p.product_name_uk || p.product_name || p.product_name_en || "Невідомий продукт";
-  const brand = p.brands ? p.brands.split(',')[0].trim() : "";
+  const rawName = p.product_name_uk || p.product_name || p.product_name_en || "Невідомий продукт";
+  const rawBrand = p.brands ? p.brands.split(',')[0].trim() : "";
+  
+  const name = cleanText(rawName);
+  const brand = cleanText(rawBrand);
   const fullName = brand ? `${brand} - ${name}` : name;
 
   const nutriments = p.nutriments || {};
@@ -61,6 +76,8 @@ export async function getProductByBarcode(barcode) {
     }
   }
 
+  const rawIngredients = p.ingredients_text_uk || p.ingredients_text || p.ingredients_text_en || null;
+
   return {
     name: fullName,
     calories,
@@ -69,7 +86,7 @@ export async function getProductByBarcode(barcode) {
     carbs,
     weight,
     image: p.image_front_url || p.image_url || null,
-    ingredients: p.ingredients_text_uk || p.ingredients_text || p.ingredients_text_en || null
+    ingredients: rawIngredients ? cleanText(rawIngredients) : null
   };
 }
 
@@ -77,7 +94,9 @@ export async function searchProductsByName(query) {
   const cleanQuery = query.trim();
   if (!cleanQuery) return [];
 
-  const url = `https://ua.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1&page_size=24`;
+  // Використовуємо world.openfoodfacts.org замість ua.openfoodfacts.org, оскільки ua часто недоступний (503),
+  // але додаємо cc=ua (country code) та lc=uk (language code), щоб отримати українські товари та описи.
+  const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanQuery)}&search_simple=1&action=process&json=1&page_size=24&cc=ua&lc=uk`;
   
   try {
     const response = await fetch(url, {
@@ -95,8 +114,11 @@ export async function searchProductsByName(query) {
 
     return data.products.map(p => {
       // Спроба отримати назву українською, інакше англійською або загальною
-      const name = p.product_name_uk || p.product_name || p.product_name_en || "Невідомий продукт";
-      const brand = p.brands ? p.brands.split(',')[0].trim() : "";
+      const rawName = p.product_name_uk || p.product_name || p.product_name_en || "Невідомий продукт";
+      const rawBrand = p.brands ? p.brands.split(',')[0].trim() : "";
+      
+      const name = cleanText(rawName);
+      const brand = cleanText(rawBrand);
       const fullName = brand ? `${brand} - ${name}` : name;
 
       const nutriments = p.nutriments || {};
@@ -122,6 +144,8 @@ export async function searchProductsByName(query) {
         }
       }
 
+      const rawIngredients = p.ingredients_text_uk || p.ingredients_text || p.ingredients_text_en || null;
+
       return {
         id: 'off-' + (p.code || Math.random().toString(36).substring(2, 9)),
         name: fullName,
@@ -133,7 +157,7 @@ export async function searchProductsByName(query) {
         weight,
         icon: "🛒",
         image: p.image_front_url || p.image_url || null,
-        ingredients: p.ingredients_text_uk || p.ingredients_text || p.ingredients_text_en || null
+        ingredients: rawIngredients ? cleanText(rawIngredients) : null
       };
     }).filter(p => p.calories > 0); // повертаємо тільки продукти з валідними калоріями
   } catch (e) {

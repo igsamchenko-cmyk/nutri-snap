@@ -97,6 +97,7 @@ export default function App() {
   const [externalSearchFoods, setExternalSearchFoods] = useState([]);
   const [isSearchingExternal, setIsSearchingExternal] = useState(false);
   const [isAIEstimating, setIsAIEstimating] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   
   // Дані страв та води (ініціалізація з localStorage)
   const [meals, setMeals] = useState(() => {
@@ -2470,40 +2471,47 @@ export default function App() {
                     className="search-input-field"
                     placeholder="Пошук страв та продуктів (напр. Хліб, Борщ...)"
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setShowSuggestions(true);
+                    }}
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.target.blur();
+                        setShowSuggestions(false);
+                      }
+                    }}
                     autoFocus
                   />
 
                   {/* Autocomplete Suggestions Dropdown */}
-                  {searchQuery.length > 0 && (
-                    <div className="autocomplete-dropdown" style={{
-                      position: 'absolute',
-                      top: 'calc(100% - 4px)',
-                      left: '16px',
-                      right: '16px',
-                      background: theme === 'light' ? '#ffffff' : '#1e293b',
-                      borderRadius: '16px',
-                      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)',
-                      border: theme === 'light' ? '1px solid #e2e8f0' : '1px solid #334155',
-                      zIndex: 110,
-                      maxHeight: '220px',
-                      overflowY: 'auto'
-                    }}>
-                      {(() => {
-                        const suggestions = mockFoods.filter(food => 
-                          food.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()))
-                        ).slice(0, 6);
+                  {(() => {
+                    if (searchQuery.length === 0 || !showSuggestions) return null;
+                    
+                    const suggestions = mockFoods.filter(food => 
+                      food.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                      (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()))
+                    ).slice(0, 6);
 
-                        if (suggestions.length === 0) {
-                          return (
-                            <div style={{ padding: '12px 16px', fontSize: '13px', color: '#94a3b8', textAlign: 'left' }}>
-                              Немає підказок...
-                            </div>
-                          );
-                        }
+                    if (suggestions.length === 0) return null;
 
-                        return suggestions.map(food => (
+                    return (
+                      <div className="autocomplete-dropdown" style={{
+                        position: 'absolute',
+                        top: 'calc(100% - 4px)',
+                        left: '16px',
+                        right: '16px',
+                        background: theme === 'light' ? '#ffffff' : '#1e293b',
+                        borderRadius: '16px',
+                        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)',
+                        border: theme === 'light' ? '1px solid #e2e8f0' : '1px solid #334155',
+                        zIndex: 110,
+                        maxHeight: '220px',
+                        overflowY: 'auto'
+                      }}>
+                        {suggestions.map(food => (
                           <div
                             key={food.id}
                             className="autocomplete-item"
@@ -2511,6 +2519,7 @@ export default function App() {
                               setSelectedSearchFood(food);
                               setSearchFoodWeight(food.weight); // default to its base weight
                               setSearchQuery(''); // clear query so dropdown disappears
+                              setShowSuggestions(false);
                             }}
                             style={{
                               display: 'flex',
@@ -2536,10 +2545,10 @@ export default function App() {
                               </span>
                             </div>
                           </div>
-                        ));
-                      })()}
-                    </div>
-                  )}
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* AI Estimate Bar */}
