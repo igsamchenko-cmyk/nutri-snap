@@ -24,11 +24,13 @@ import {
   QrCode,
   Download,
   Database,
-  Star
+  Star,
+  Search,
+  X
 } from 'lucide-react';
 import { mockFoods } from './data/mockFood';
-import { analyzeFoodImage, detectBarcodeFromImage } from './services/geminiService';
-import { getProductByBarcode } from './services/openFoodFactsService';
+import { analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName } from './services/geminiService';
+import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
@@ -78,7 +80,23 @@ const getDashboardTitle = (dateStr) => {
 export default function App() {
   // --- Global States ---
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [previousTab, setPreviousTab] = useState('dashboard');
   const [selectedDate, setSelectedDate] = useState(getTodayString());
+
+  const changeTab = (tabName) => {
+    setPreviousTab(activeTab);
+    setActiveTab(tabName);
+  };
+
+  // --- States for Database Search ---
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('Усі');
+  const [selectedSearchFood, setSelectedSearchFood] = useState(null);
+  const [searchFoodWeight, setSearchFoodWeight] = useState(100);
+  const [searchMealCategory, setSearchMealCategory] = useState('Сніданок');
+  const [externalSearchFoods, setExternalSearchFoods] = useState([]);
+  const [isSearchingExternal, setIsSearchingExternal] = useState(false);
+  const [isAIEstimating, setIsAIEstimating] = useState(false);
   
   // Дані страв та води (ініціалізація з localStorage)
   const [meals, setMeals] = useState(() => {
@@ -124,19 +142,12 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     try {
       const stored = localStorage.getItem('nutrisnap_apikey');
-      return stored ? stored.trim() : '';
+      return stored ? stored.trim() : 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
     } catch (e) {
-      return '';
+      return 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
     }
   });
-  const [scanMode, setScanMode] = useState(() => {
-    try {
-      const storedMode = localStorage.getItem('nutrisnap_scanmode');
-      return storedMode || 'gemini';
-    } catch (e) {
-      return 'gemini';
-    }
-  });
+  const [scanMode, setScanMode] = useState('gemini');
   const [geminiModel, setGeminiModel] = useState(() => {
     try {
       return localStorage.getItem('nutrisnap_geminimodel') || 'gemini-2.5-flash';
@@ -290,11 +301,8 @@ export default function App() {
   // Автоматичне налаштування режиму сканування
   useEffect(() => {
     try {
-      const currentScanMode = localStorage.getItem('nutrisnap_scanmode');
-      if (!currentScanMode) {
-        localStorage.setItem('nutrisnap_scanmode', 'gemini');
-        setScanMode('gemini');
-      }
+      localStorage.setItem('nutrisnap_scanmode', 'gemini');
+      setScanMode('gemini');
     } catch (e) {
       console.error("Error auto-configuring API key:", e);
     }
@@ -461,20 +469,45 @@ export default function App() {
     }
   }, [activeTab, scannerMode]);
 
-  // Керування камерою при перемиканні вкладок
+  // Керування камерою при перемиканні вкладок та режимів
   useEffect(() => {
-    if (activeTab !== 'scanner') {
+    if (activeTab !== 'scanner' || scannerMode === 'search') {
       stopCamera();
-      // Очищуємо результати пошуку штрих-кодів, якщо виходимо зі сканера повністю
-      setScanResult(null);
-      setBarcodeResult(null);
-      setBarcodeError(null);
-      setBarcodeInput('');
+      if (activeTab !== 'scanner') {
+        // Очищуємо результати пошуку штрих-кодів, якщо виходимо зі сканера повністю
+        setScanResult(null);
+        setBarcodeResult(null);
+        setBarcodeError(null);
+        setBarcodeInput('');
+      }
     } else {
       startCamera();
     }
     return () => stopCamera();
-  }, [activeTab]);
+  }, [activeTab, scannerMode]);
+
+  // Дебоунс-пошук продуктів в Open Food Facts API при введенні запиту
+  useEffect(() => {
+    if (activeTab !== 'scanner' || scannerMode !== 'search' || !searchQuery || searchQuery.trim().length < 2) {
+      setExternalSearchFoods([]);
+      setIsSearchingExternal(false);
+      return;
+    }
+
+    setIsSearchingExternal(true);
+    const delayTimer = setTimeout(async () => {
+      try {
+        const results = await searchProductsByName(searchQuery);
+        setExternalSearchFoods(results);
+      } catch (err) {
+        console.error("Error in live search query:", err);
+      } finally {
+        setIsSearchingExternal(false);
+      }
+    }, 600); // 600ms debounce
+
+    return () => clearTimeout(delayTimer);
+  }, [searchQuery, activeTab, scannerMode]);
 
   // --- Camera Operations ---
   const startCamera = async () => {
@@ -576,43 +609,17 @@ export default function App() {
     setScanResult(null);
     setScannedMealCategory(preselectedCategory || getDefaultCategory());
     try {
-      if (scanMode === 'gemini') {
-        if (!apiKey || apiKey.trim() === '') {
-          throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
-        }
-        // Запит до реального Gemini API
-        const result = await analyzeFoodImage(imageDataBase64, apiKey.trim(), geminiModel);
-        setScanResult(result);
-        setEditedWeight(Number(result.weight) || 200);
-        setScannedProtein(Number(result.protein) || 0);
-        setScannedFat(Number(result.fat) || 0);
-        setScannedCarbs(Number(result.carbs) || 0);
-        setScannedCalories(Number(result.calories) || 0);
-      } else {
-        // Демо-режим (симуляція аналізу 1.5 сек)
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        const randomIndex = Math.floor(Math.random() * mockFoods.length);
-        const selectedFood = mockFoods[randomIndex];
-        
-        const mockResult = {
-          name: selectedFood.name,
-          calories: selectedFood.calories,
-          protein: selectedFood.protein,
-          fat: selectedFood.fat,
-          carbs: selectedFood.carbs,
-          weight: selectedFood.weight,
-          confidence: selectedFood.confidence,
-          ingredients: selectedFood.ingredients,
-          image: selectedFood.image
-        };
-        setScanResult(mockResult);
-        setEditedWeight(Number(mockResult.weight) || 200);
-        setScannedProtein(Number(mockResult.protein) || 0);
-        setScannedFat(Number(mockResult.fat) || 0);
-        setScannedCarbs(Number(mockResult.carbs) || 0);
-        setScannedCalories(Number(mockResult.calories) || 0);
+      if (!apiKey || apiKey.trim() === '') {
+        throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
       }
+      // Запит до реального Gemini API
+      const result = await analyzeFoodImage(imageDataBase64, apiKey.trim(), geminiModel);
+      setScanResult(result);
+      setEditedWeight(Number(result.weight) || 200);
+      setScannedProtein(Number(result.protein) || 0);
+      setScannedFat(Number(result.fat) || 0);
+      setScannedCarbs(Number(result.carbs) || 0);
+      setScannedCalories(Number(result.calories) || 0);
     } catch (err) {
       console.error(err);
       showToast(err.message || "Помилка під час аналізу страви.", "error");
@@ -779,7 +786,7 @@ export default function App() {
     const finalCarbs = Number(scannedCarbs) || 0;
 
     const newMeal = {
-      id: Date.now().toString(),
+      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
       name: scanResult.name,
       calories: finalCalories,
       protein: finalProtein,
@@ -813,17 +820,10 @@ export default function App() {
     setBarcodeResult(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     try {
-      let barcodeVal = null;
-      if (scanMode === 'gemini') {
-        if (!apiKey || apiKey.trim() === '') {
-          throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
-        }
-        barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey.trim(), geminiModel);
-      } else {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        const mockBarcodes = ["8000500023976", "5449000000996", "5900311000361"];
-        barcodeVal = mockBarcodes[Math.floor(Math.random() * mockBarcodes.length)];
+      if (!apiKey || apiKey.trim() === '') {
+        throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
       }
+      const barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey.trim(), geminiModel);
 
       if (!barcodeVal) {
         throw new Error("Не вдалося розпізнати штрих-код на фото. Спробуйте інший ракурс або введіть його вручну.");
@@ -997,7 +997,7 @@ export default function App() {
     const finalCarbs = Number(barcodeScannedCarbs) || 0;
 
     const newMeal = {
-      id: Date.now().toString(),
+      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
       name: barcodeResult.name,
       calories: finalCalories,
       protein: finalProtein,
@@ -1034,6 +1034,118 @@ export default function App() {
       default: return '🍕';
     }
   };
+
+  // --- Manual Search Helper Functions ---
+  const addSearchMealToDiary = () => {
+    if (!selectedSearchFood) return;
+    const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+    
+    const weightFactor = Number(searchFoodWeight) / Number(selectedSearchFood.weight);
+    const finalCalories = Math.round(Number(selectedSearchFood.calories) * weightFactor);
+    const finalProtein = Math.round(Number(selectedSearchFood.protein) * weightFactor * 10) / 10;
+    const finalFat = Math.round(Number(selectedSearchFood.fat) * weightFactor * 10) / 10;
+    const finalCarbs = Math.round(Number(selectedSearchFood.carbs) * weightFactor * 10) / 10;
+
+    const newMeal = {
+      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+      name: selectedSearchFood.name,
+      calories: finalCalories,
+      protein: finalProtein,
+      fat: finalFat,
+      carbs: finalCarbs,
+      weight: Number(searchFoodWeight),
+      originalCalories: Number(selectedSearchFood.calories),
+      originalProtein: Number(selectedSearchFood.protein),
+      originalFat: Number(selectedSearchFood.fat),
+      originalCarbs: Number(selectedSearchFood.carbs),
+      originalWeight: Number(selectedSearchFood.weight),
+      category: searchMealCategory,
+      time: mealTimeStr,
+      date: selectedDate,
+      icon: selectedSearchFood.icon || getEmojiForCategory(searchMealCategory)
+    };
+
+    setMeals(prev => [newMeal, ...prev]);
+    setPreselectedCategory(null);
+    showToast(`"${selectedSearchFood.name}" додано до щоденника!`, "success");
+    
+    setSelectedSearchFood(null);
+    setSearchQuery('');
+    changeTab(previousTab || 'dashboard');
+  };
+
+  const handleAIFoodEstimation = async () => {
+    if (!searchQuery || !searchQuery.trim()) return;
+    if (!apiKey) {
+      showToast("Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях для оцінки страв через ШІ.", "error");
+      return;
+    }
+
+    setIsAIEstimating(true);
+    try {
+      const estimatedResult = await estimateFoodNutritionByName(searchQuery, apiKey, geminiModel);
+      if (estimatedResult) {
+        setSelectedSearchFood({
+          id: 'ai-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+          name: estimatedResult.name,
+          brand: "Оцінка ШІ Gemini",
+          calories: Number(estimatedResult.calories) || 0,
+          protein: Number(estimatedResult.protein) || 0,
+          fat: Number(estimatedResult.fat) || 0,
+          carbs: Number(estimatedResult.carbs) || 0,
+          weight: Number(estimatedResult.weight) || 100,
+          icon: estimatedResult.icon || "🔮",
+          ingredients: estimatedResult.ingredients || ""
+        });
+        setSearchFoodWeight(Number(estimatedResult.weight) || 100);
+        showToast("ШІ успішно вирахував КБЖВ для страви!", "success");
+      }
+    } catch (err) {
+      console.error("Error estimating food nutrition via Gemini:", err);
+      showToast(err.message || "Помилка при роботі з ШІ. Спробуйте ще раз.", "error");
+    } finally {
+      setIsAIEstimating(false);
+    }
+  };
+
+  const filteredSearchFoods = mockFoods.filter(food => {
+    const matchesQuery = food.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                         (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()));
+    if (!matchesQuery) return false;
+
+    if (selectedCategoryFilter === 'Усі') return true;
+    if (selectedCategoryFilter === 'Супермаркети') {
+      const isSupermarket = food.brand && (
+        food.brand.includes('АТБ') || 
+        food.brand.includes('Сільпо') || 
+        food.brand.includes('Своя Лінія') || 
+        food.brand.includes('Розумний Вибір') || 
+        food.brand.includes('Премія') ||
+        food.brand.includes('Повна Чаша') ||
+        food.brand.includes('Яготинське') ||
+        food.brand.includes('Галичина') ||
+        food.brand.includes('Комо') ||
+        food.brand.includes('Наша Ряба') ||
+        food.brand.includes('Пирятин') ||
+        food.brand.includes('Чумак') ||
+        food.brand.includes('Верес') ||
+        food.brand.includes('Рошен') ||
+        food.brand.includes('Світоч')
+      );
+      return isSupermarket;
+    }
+    if (selectedCategoryFilter === 'Страви') {
+      return food.brand === 'Українська кухня' || food.brand === 'Популярне';
+    }
+    if (selectedCategoryFilter === 'Сніданок') return food.category === 'Сніданок';
+    if (selectedCategoryFilter === 'Обід') return food.category === 'Обід';
+    if (selectedCategoryFilter === 'Вечеря') return food.category === 'Вечеря';
+    if (selectedCategoryFilter === 'Перекуси') return food.category === 'Перекус' || food.category === 'Перший перекус' || food.category === 'Другий перекус';
+    if (selectedCategoryFilter === 'Обрані') {
+      return favorites.some(fav => fav.name === food.name);
+    }
+    return true;
+  });
   // Оновлення ваги страви з пропорційним перерахунком КБЖВ
   const handleUpdateMealWeight = (mealId, value) => {
     setMeals(prevMeals => prevMeals.map(meal => {
@@ -1145,7 +1257,7 @@ export default function App() {
   const handleWaterAdd = (amount = 250) => {
     setWaterIntake(prev => ({
       ...prev,
-      [selectedDate]: (prev[selectedDate] || 0) + amount
+      [selectedDate]: Math.max(0, (prev[selectedDate] || 0) + amount)
     }));
   };
 
@@ -1292,7 +1404,31 @@ export default function App() {
       
       {/* --- App Header --- */}
       <header className="app-header">
-        <div className="brand">
+        <div className="brand" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {activeTab !== 'dashboard' && (
+            <button
+              onClick={() => {
+                changeTab('dashboard');
+              }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'inherit',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '4px',
+                borderRadius: '8px',
+                transition: 'background 0.2s',
+                marginLeft: '-4px'
+              }}
+              className="header-back-btn"
+              title="Назад на головну"
+            >
+              <ChevronLeft size={22} style={{ color: 'var(--color-calories)' }} />
+            </button>
+          )}
           <span className="brand-logo">NutriSnap</span>
           {scanMode === 'gemini' && (
             <span style={{ 
@@ -1539,7 +1675,7 @@ export default function App() {
                             const category = getDefaultCategory();
                             const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
                             const newMeal = {
-                              id: Date.now().toString(),
+                              id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
                               name: fav.name,
                               calories: Number(fav.calories) || 0,
                               protein: Number(fav.protein) || 0,
@@ -1626,7 +1762,8 @@ export default function App() {
                             className="category-add-btn" 
                             onClick={() => {
                               setPreselectedCategory(cat.name);
-                              setActiveTab('scanner');
+                              setScannerMode('search');
+                              changeTab('scanner');
                             }}
                             title={`Додати до: ${cat.name}`}
                           >
@@ -1642,7 +1779,8 @@ export default function App() {
                             className="category-quick-add-link"
                             onClick={() => {
                               setPreselectedCategory(cat.name);
-                              setActiveTab('scanner');
+                              setScannerMode('search');
+                              changeTab('scanner');
                             }}
                           >
                             + Додати
@@ -1737,31 +1875,52 @@ export default function App() {
         )}
 
         {activeTab === 'scanner' && (
-          <div className="camera-view-container">
+          <div className="camera-view-container" style={{ background: scannerMode === 'search' ? (theme === 'light' ? '#f8fafc' : '#0b0f19') : '#000' }}>
             {/* Top Bar on camera view */}
-            <div className="app-header" style={{ position: 'absolute', top: 0, left: 0, width: '100%', background: 'rgba(0,0,0,0.6)', border: 'none', flexDirection: 'column', gap: '8px', padding: 'calc(12px + env(safe-area-inset-top, 0px)) 20px 12px', zIndex: 60 }}>
+            <div className="app-header" style={{ position: scannerMode === 'search' ? 'relative' : 'absolute', top: 0, left: 0, width: '100%', background: scannerMode === 'search' ? 'transparent' : 'rgba(0,0,0,0.6)', border: 'none', flexDirection: 'column', gap: '8px', padding: 'calc(12px + env(safe-area-inset-top, 0px)) 20px 12px', zIndex: 60 }}>
               <div style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
                 <button 
                   onClick={() => {
                     stopCamera();
-                    setActiveTab('dashboard');
+                    changeTab(previousTab || 'dashboard');
                   }}
                   className="btn-secondary"
-                  style={{ width: 'auto', margin: 0, padding: '8px 16px', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.1)', color: 'white', border: 'none' }}
+                  style={{ 
+                    width: 'auto', 
+                    margin: 0, 
+                    padding: '8px 16px', 
+                    borderRadius: '12px', 
+                    background: scannerMode === 'search' ? 'rgba(99, 102, 241, 0.1)' : 'rgba(255, 255, 255, 0.1)', 
+                    color: scannerMode === 'search' ? 'var(--color-accent)' : 'white', 
+                    border: 'none' 
+                  }}
                 >
                   Назад
                 </button>
-                <div style={{ color: 'white', fontWeight: 600, fontSize: '16px' }}>
-                  Сканування їжі
+                <div style={{ 
+                  color: scannerMode === 'search' ? (theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)') : 'white', 
+                  fontWeight: 600, 
+                  fontSize: '16px' 
+                }}>
+                  Сканування та Пошук
                 </div>
                 <div style={{ width: '60px' }}></div> {/* Spacer */}
               </div>
 
               {/* Режими сканування */}
-              <div className="scanner-sub-tabs">
+              <div className="scanner-sub-tabs" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <button 
+                  className={`scanner-sub-tab ${scannerMode === 'search' ? 'active' : ''}`}
+                  onClick={() => setScannerMode('search')}
+                  style={{ gap: '6px' }}
+                >
+                  <Search size={14} />
+                  <span>Пошук</span>
+                </button>
                 <button 
                   className={`scanner-sub-tab ${scannerMode === 'camera' ? 'active' : ''}`}
                   onClick={() => setScannerMode('camera')}
+                  style={{ gap: '6px' }}
                 >
                   <Camera size={14} />
                   <span>Фото ШІ</span>
@@ -1769,6 +1928,7 @@ export default function App() {
                 <button 
                   className={`scanner-sub-tab ${scannerMode === 'barcode' ? 'active' : ''}`}
                   onClick={() => setScannerMode('barcode')}
+                  style={{ gap: '6px' }}
                 >
                   <QrCode size={14} />
                   <span>Штрих-код</span>
@@ -1777,20 +1937,21 @@ export default function App() {
             </div>
 
             {/* Shared Camera Preview Wrapper */}
-            <div className="camera-preview-wrapper" style={{ paddingTop: 'calc(120px + env(safe-area-inset-top, 0px))' }}>
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted 
-                className="camera-video"
-                style={{ display: cameraActive ? 'block' : 'none' }}
-              ></video>
-              
-              {scannerMode === 'camera' ? (
+            {(scannerMode === 'camera' || scannerMode === 'barcode') && (
+              <div className="camera-preview-wrapper" style={{ paddingTop: 0 }}>
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted 
+                  className="camera-video"
+                  style={{ display: cameraActive ? 'block' : 'none' }}
+                ></video>
+                
+                {scannerMode === 'camera' ? (
                 <>
                   {!cameraActive && (
-                    <div className="camera-placeholder" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '24px', textAlign: 'center' }}>
+                    <div className="camera-placeholder" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: 'calc(130px + env(safe-area-inset-top, 0px)) 24px 24px', textAlign: 'center' }}>
                       <div style={{ width: '80px', height: '80px', borderRadius: '24px', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--color-calories)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px', boxShadow: '0 8px 24px rgba(16, 185, 129, 0.15)', marginLeft: 'auto', marginRight: 'auto' }}>
                         <Camera size={40} style={{ display: 'block', margin: 'auto' }} />
                       </div>
@@ -1844,12 +2005,6 @@ export default function App() {
                         style={{ display: 'none' }} 
                         onChange={handleFileUpload} 
                       />
-                      
-                      {scanMode === 'mock' && (
-                        <div style={{ marginTop: '20px', fontSize: '11px', color: 'var(--text-dark-secondary)', background: 'rgba(255,255,255,0.02)', padding: '8px 16px', borderRadius: '12px', border: '1px solid var(--border-dark)' }}>
-                          💡 Режим симуляції. Натисніть кнопку вище для імітації сканування.
-                        </div>
-                      )}
                     </div>
                   )}
 
@@ -1864,14 +2019,6 @@ export default function App() {
                           <div className="scanner-laser"></div>
                         </div>
                       </div>
-
-                      {scanMode === 'mock' && (
-                        <div className="scanner-hint-container">
-                          <div className="demo-scanner-hint" style={{ margin: 0 }}>
-                            💡 Режим Симуляції. Натисніть кнопку знімка внизу для імітації розпізнавання.
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )}
 
@@ -1890,6 +2037,28 @@ export default function App() {
 
                   {scanResult && (
                     <div className="scan-result-card">
+                      <button 
+                        onClick={() => setScanResult(null)}
+                        style={{
+                          position: 'absolute',
+                          top: '16px',
+                          right: '16px',
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          border: 'none',
+                          color: '#fff',
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          zIndex: 100
+                        }}
+                        title="Закрити"
+                      >
+                        <X size={16} />
+                      </button>
                       <div className="results-header" style={{ marginBottom: '8px' }}>
                         <div>
                           <span className="match-badge">
@@ -1898,22 +2067,6 @@ export default function App() {
                           <h2 className="dish-title">{scanResult.name}</h2>
                         </div>
                         <span style={{ fontSize: '28px' }}>🥗</span>
-                      </div>
-
-                      <div style={{ 
-                        display: 'inline-flex', 
-                        alignItems: 'center', 
-                        gap: '6px', 
-                        background: 'rgba(16, 185, 129, 0.1)', 
-                        border: '1px solid rgba(16, 185, 129, 0.2)', 
-                        borderRadius: '8px', 
-                        padding: '4px 10px', 
-                        fontSize: '12px', 
-                        color: '#34d399', 
-                        marginBottom: '16px',
-                        fontWeight: 500
-                      }}>
-                        📅 Запис у щоденник за: <strong style={{ marginLeft: '4px' }}>{formatDateLabel(selectedDate)}</strong>
                       </div>
 
                       <div className="results-macros-grid">
@@ -1994,18 +2147,14 @@ export default function App() {
                             min="1"
                             max="5000"
                           />
-                          <span style={{ fontSize: '11px', opacity: 0.6 }}>(ориг. {baselineWeight}г)</span>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-dark-secondary)' }}>грам</span>
                         </div>
                       </div>
 
-                      {scanResult.ingredients && (
-                        <div className="detail-row">
-                          <span className="detail-label">Склад страви:</span>
-                          <span className="detail-value" style={{ fontStyle: 'italic', fontSize: '12px' }}>
-                            {scanResult.ingredients}
-                          </span>
-                        </div>
-                      )}
+                      <div className="detail-row">
+                        <span className="detail-label">Інгредієнти:</span>
+                        <span className="detail-value">{scanResult.ingredients || "Не визначено"}</span>
+                      </div>
 
                       <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         <div style={{ display: 'flex', gap: '10px' }}>
@@ -2013,9 +2162,10 @@ export default function App() {
                             <Check size={18} />
                             Додати до щоденника
                           </button>
+                          
                           <button 
                             className={`btn-favorite-toggle ${isFavorite(scanResult?.name) ? 'active' : ''}`}
-                            onClick={toggleFavoriteScanned}
+                            onClick={() => toggleFavoriteMeal(scanResult)}
                             title={isFavorite(scanResult?.name) ? "Видалити з обраного" : "Додати в обране"}
                             style={{
                               width: '46px',
@@ -2049,7 +2199,7 @@ export default function App() {
               ) : (
                 <>
                   {!cameraActive && (
-                    <div className="camera-placeholder" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '24px', textAlign: 'center' }}>
+                    <div className="camera-placeholder" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: 'calc(130px + env(safe-area-inset-top, 0px)) 24px 24px', textAlign: 'center' }}>
                       <div style={{ width: '80px', height: '80px', borderRadius: '24px', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--color-calories)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px', boxShadow: '0 8px 24px rgba(16, 185, 129, 0.15)', marginLeft: 'auto', marginRight: 'auto' }}>
                         <QrCode size={40} style={{ display: 'block', margin: 'auto' }} />
                       </div>
@@ -2103,33 +2253,6 @@ export default function App() {
                         style={{ display: 'none' }} 
                         onChange={handleBarcodeFileUpload} 
                       />
-
-                      {/* Manual input fallback when camera is not active */}
-                      <div className="barcode-search-card" style={{ width: '100%', maxWidth: '340px', marginTop: '20px' }}>
-                        <form onSubmit={handleBarcodeSearch} className="barcode-input-wrapper" style={{ margin: 0 }}>
-                          <input 
-                            type="tel"
-                            className="barcode-input"
-                            placeholder="Штрих-код (EAN) вручну"
-                            value={barcodeInput}
-                            onChange={(e) => setBarcodeInput(e.target.value.replace(/\D/g, ''))}
-                            maxLength={15}
-                          />
-                          <button 
-                            type="submit" 
-                            className="btn-primary" 
-                            style={{ width: 'auto', padding: '0 20px', margin: 0, borderRadius: '14px' }}
-                            disabled={barcodeLoading}
-                          >
-                            {barcodeLoading ? <RefreshCw className="spin" size={18} /> : "Пошук"}
-                          </button>
-                        </form>
-                        {barcodeError && (
-                          <div style={{ color: '#ef4444', fontSize: '11px', marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                            <AlertCircle size={12} /> {barcodeError}
-                          </div>
-                        )}
-                      </div>
                     </div>
                   )}
 
@@ -2144,14 +2267,6 @@ export default function App() {
                           <div className="barcode-laser"></div>
                         </div>
                       </div>
-
-                      {scanMode === 'mock' && (
-                        <div className="scanner-hint-container">
-                          <div className="demo-scanner-hint" style={{ margin: 0 }}>
-                            💡 Режим Симуляції. Натисніть кнопку затвора внизу для імітації розпізнавання.
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )}
 
@@ -2164,14 +2279,36 @@ export default function App() {
                       <h3 style={{ fontFamily: 'var(--font-display)', fontWeight: 700 }}>
                         {isBarcodeScanning ? "ШІ зчитує штрих-код..." : "Шукаємо продукт в базі..."}
                       </h3>
-                      <p style={{ fontSize: '13px', color: '#94a3b8', width: '80%', textAlign: 'center' }}>
-                        {isBarcodeScanning ? "Визначаємо цифри штрих-коду за допомогою Gemini OCR" : "Отримуємо харчову цінність з бази Open Food Facts"}
-                      </p>
                     </div>
                   )}
 
                   {barcodeResult && (
                     <div className="scan-result-card" style={{ zIndex: 100 }}>
+                      <button 
+                        onClick={() => {
+                          setBarcodeResult(null);
+                          setBarcodeInput('');
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: '16px',
+                          right: '16px',
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          border: 'none',
+                          color: '#fff',
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          zIndex: 100
+                        }}
+                        title="Закрити"
+                      >
+                        <X size={16} />
+                      </button>
                       <div className="results-header" style={{ marginBottom: '8px' }}>
                         <div className="barcode-product-info" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                           {barcodeResult.image ? (
@@ -2186,22 +2323,6 @@ export default function App() {
                             <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px' }}>{barcodeResult.name}</h2>
                           </div>
                         </div>
-                      </div>
-
-                      <div style={{ 
-                        display: 'inline-flex', 
-                        alignItems: 'center', 
-                        gap: '6px', 
-                        background: 'rgba(59, 130, 246, 0.1)', 
-                        border: '1px solid rgba(59, 130, 246, 0.2)', 
-                        borderRadius: '8px', 
-                        padding: '4px 10px', 
-                        fontSize: '12px', 
-                        color: '#60a5fa', 
-                        marginBottom: '16px',
-                        fontWeight: 500
-                      }}>
-                        📅 Запис у щоденник за: <strong style={{ marginLeft: '4px' }}>{formatDateLabel(selectedDate)}</strong>
                       </div>
 
                       <div className="results-macros-grid">
@@ -2272,7 +2393,7 @@ export default function App() {
                       </div>
 
                       <div className="detail-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span className="detail-label">Вага порції (грам):</span>
+                        <span className="detail-label">Вага продукту (грам):</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <input 
                             type="number"
@@ -2337,7 +2458,351 @@ export default function App() {
                   )}
                 </>
               )}
-            </div>
+              </div>
+            )}
+
+            {scannerMode === 'search' && (
+              <div className="search-db-container">
+                {/* Search Input Box */}
+                <div className="search-input-wrapper" style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    className="search-input-field"
+                    placeholder="Пошук страв та продуктів (напр. Хліб, Борщ...)"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    autoFocus
+                  />
+
+                  {/* Autocomplete Suggestions Dropdown */}
+                  {searchQuery.length > 0 && (
+                    <div className="autocomplete-dropdown" style={{
+                      position: 'absolute',
+                      top: 'calc(100% - 4px)',
+                      left: '16px',
+                      right: '16px',
+                      background: theme === 'light' ? '#ffffff' : '#1e293b',
+                      borderRadius: '16px',
+                      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)',
+                      border: theme === 'light' ? '1px solid #e2e8f0' : '1px solid #334155',
+                      zIndex: 110,
+                      maxHeight: '220px',
+                      overflowY: 'auto'
+                    }}>
+                      {(() => {
+                        const suggestions = mockFoods.filter(food => 
+                          food.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()))
+                        ).slice(0, 6);
+
+                        if (suggestions.length === 0) {
+                          return (
+                            <div style={{ padding: '12px 16px', fontSize: '13px', color: '#94a3b8', textAlign: 'left' }}>
+                              Немає підказок...
+                            </div>
+                          );
+                        }
+
+                        return suggestions.map(food => (
+                          <div
+                            key={food.id}
+                            className="autocomplete-item"
+                            onClick={() => {
+                              setSelectedSearchFood(food);
+                              setSearchFoodWeight(food.weight); // default to its base weight
+                              setSearchQuery(''); // clear query so dropdown disappears
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              padding: '12px 16px',
+                              cursor: 'pointer',
+                              borderBottom: theme === 'light' ? '1px solid #f1f5f9' : '1px solid #334155',
+                              fontSize: '14px',
+                              textAlign: 'left'
+                            }}
+                          >
+                            <span style={{ fontSize: '18px' }}>{food.icon || '🥗'}</span>
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                              <span style={{ 
+                                fontWeight: 600, 
+                                color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' 
+                              }}>
+                                {food.name}
+                              </span>
+                              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                                {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал
+                              </span>
+                            </div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  )}
+                </div>
+
+                {/* AI Estimate Bar */}
+                {searchQuery.trim().length >= 2 && (
+                  <div style={{ padding: '0 16px 12px' }}>
+                    <button
+                      className="btn-primary"
+                      onClick={handleAIFoodEstimation}
+                      disabled={isAIEstimating}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        borderRadius: '14px',
+                        background: 'linear-gradient(135deg, #6366f1 0%, #10b981 100%)',
+                        border: 'none',
+                        color: 'white',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        boxShadow: '0 4px 12px rgba(99, 102, 241, 0.2)'
+                      }}
+                    >
+                      {isAIEstimating ? (
+                        <>
+                          <RefreshCw className="spin" size={16} />
+                          <span>ШІ аналізує страву «{searchQuery}»...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={16} />
+                          <span>🔮 Оцінити страву «{searchQuery}» через ШІ Gemini</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Filter Chips */}
+                <div className="filter-chips-container">
+                  {['Усі', 'Супермаркети', 'Страви', 'Обрані', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
+                    <button
+                      key={filter}
+                      className={`filter-chip ${selectedCategoryFilter === filter ? 'active' : ''}`}
+                      onClick={() => setSelectedCategoryFilter(filter)}
+                    >
+                      {filter}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Results List */}
+                <div className="search-results-list">
+                  {isSearchingExternal && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', fontSize: '13px', color: 'var(--color-accent)' }}>
+                      <RefreshCw className="spin" size={14} />
+                      <span>Шукаємо в базі Open Food Facts...</span>
+                    </div>
+                  )}
+
+                  {filteredSearchFoods.length === 0 && externalSearchFoods.length === 0 && !isSearchingExternal ? (
+                    <div style={{ textAlign: 'center', color: '#94a3b8', padding: '40px 20px', fontSize: '14px' }}>
+                      Нічого не знайдено за запитом. Спробуйте змінити фільтр або ввести назву страви для оцінки ШІ вище.
+                    </div>
+                  ) : (
+                    <>
+                      {/* Local Results */}
+                      {filteredSearchFoods.map(food => (
+                        <div
+                          key={food.id}
+                          className="search-food-item"
+                          onClick={() => {
+                            setSelectedSearchFood(food);
+                            setSearchFoodWeight(food.weight);
+                          }}
+                        >
+                          <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🥗'}</span>
+                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
+                            <span style={{ fontWeight: 600, fontSize: '14px', color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' }}>
+                              {food.name}
+                            </span>
+                            <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                              {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                            </span>
+                          </div>
+                          {food.brand && <span className="search-brand-badge">{food.brand}</span>}
+                        </div>
+                      ))}
+
+                      {/* External Open Food Facts Results */}
+                      {externalSearchFoods.map(food => (
+                        <div
+                          key={food.id}
+                          className="search-food-item"
+                          style={{ borderLeft: '3px solid var(--color-water)' }}
+                          onClick={() => {
+                            setSelectedSearchFood(food);
+                            setSearchFoodWeight(food.weight);
+                          }}
+                        >
+                          <span style={{ fontSize: '24px', marginRight: '8px' }}>🛒</span>
+                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
+                            <span style={{ fontWeight: 600, fontSize: '14px', color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' }}>
+                              {food.name}
+                            </span>
+                            <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                              {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                            </span>
+                          </div>
+                          <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>База OFF</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+
+                {/* Selected Food Detail Card (similar to scan-result-card) */}
+                {selectedSearchFood && (
+                  <div className="scan-result-card" style={{ zIndex: 100 }}>
+                    <button
+                      onClick={() => setSelectedSearchFood(null)}
+                      style={{
+                        position: 'absolute',
+                        top: '16px',
+                        right: '16px',
+                        background: 'rgba(255, 255, 255, 0.08)',
+                        border: 'none',
+                        color: '#fff',
+                        width: '32px',
+                        height: '32px',
+                        borderRadius: '50%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        zIndex: 100
+                      }}
+                      title="Закрити"
+                    >
+                      <X size={16} />
+                    </button>
+                    <div className="results-header" style={{ marginBottom: '8px' }}>
+                      <div className="barcode-product-info" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                        <div style={{ fontSize: '36px' }}>{selectedSearchFood.icon || '🥗'}</div>
+                        <div style={{ textAlign: 'left' }}>
+                          {selectedSearchFood.brand && <span className="match-badge">{selectedSearchFood.brand}</span>}
+                          <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px' }}>{selectedSearchFood.name}</h2>
+                        </div>
+                      </div>
+                    </div>
+
+                    {(() => {
+                      const factor = Number(searchFoodWeight) / Number(selectedSearchFood.weight);
+                      const scaledKcal = Math.round(Number(selectedSearchFood.calories) * factor);
+                      const scaledProt = Math.round(Number(selectedSearchFood.protein) * factor * 10) / 10;
+                      const scaledFat = Math.round(Number(selectedSearchFood.fat) * factor * 10) / 10;
+                      const scaledCarbs = Math.round(Number(selectedSearchFood.carbs) * factor * 10) / 10;
+
+                      return (
+                        <>
+                          <div className="results-macros-grid">
+                            <div className="results-macro-box box-kcal">
+                              <div className="macro-box-val" style={{ color: 'var(--color-calories)' }}>{scaledKcal}</div>
+                              <div className="macro-box-label">ккал</div>
+                            </div>
+                            <div className="results-macro-box box-protein">
+                              <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                                <span style={{ color: 'var(--color-protein)', fontSize: '18px', fontWeight: 700 }}>{scaledProt}</span>
+                                <span style={{ color: 'var(--color-protein)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                              </div>
+                              <div className="macro-box-label">білки</div>
+                            </div>
+                            <div className="results-macro-box box-fat">
+                              <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                                <span style={{ color: 'var(--color-fat)', fontSize: '18px', fontWeight: 700 }}>{scaledFat}</span>
+                                <span style={{ color: 'var(--color-fat)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                              </div>
+                              <div className="macro-box-label">жири</div>
+                            </div>
+                            <div className="results-macro-box box-carbs">
+                              <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                                <span style={{ color: 'var(--color-carbs)', fontSize: '18px', fontWeight: 700 }}>{scaledCarbs}</span>
+                                <span style={{ color: 'var(--color-carbs)', fontSize: '12px', fontWeight: 700 }}>г</span>
+                              </div>
+                              <div className="macro-box-label">вуглеводи</div>
+                            </div>
+                          </div>
+
+                          <div className="detail-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                            <span className="detail-label">Прийом їжі:</span>
+                            <select
+                              className="category-select"
+                              value={searchMealCategory}
+                              onChange={(e) => setSearchMealCategory(e.target.value)}
+                            >
+                              <option value="Сніданок">Сніданок</option>
+                              <option value="Перший перекус">Перший перекус</option>
+                              <option value="Обід">Обід</option>
+                              <option value="Другий перекус">Другий перекус</option>
+                              <option value="Вечеря">Вечеря</option>
+                            </select>
+                          </div>
+
+                          <div className="detail-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span className="detail-label">Вага продукту (грам):</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <input
+                                type="number"
+                                className="weight-input"
+                                value={searchFoodWeight}
+                                onChange={(e) => setSearchFoodWeight(e.target.value)}
+                                min="1"
+                                max="5000"
+                              />
+                              <span style={{ fontSize: '11px', opacity: 0.6 }}>(ориг. {selectedSearchFood.weight}г)</span>
+                            </div>
+                          </div>
+
+                          {selectedSearchFood.ingredients && (
+                            <div className="detail-row" style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
+                              <span className="detail-label">Склад продукту:</span>
+                              <span className="detail-value" style={{ fontStyle: 'italic', fontSize: '11px', color: '#94a3b8', maxHeight: '70px', overflowY: 'auto', display: 'block', textAlign: 'left' }}>
+                                {selectedSearchFood.ingredients}
+                              </span>
+                            </div>
+                          )}
+
+                          <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                              <button className="btn-primary" style={{ flex: 1 }} onClick={addSearchMealToDiary}>
+                                <Check size={18} />
+                                Додати до щоденника
+                              </button>
+                              <button 
+                                className={`btn-favorite-toggle ${isFavorite(selectedSearchFood.name) ? 'active' : ''}`}
+                                onClick={() => toggleFavoriteMeal(selectedSearchFood)}
+                                title={isFavorite(selectedSearchFood.name) ? "Видалити з обраного" : "Додати в обране"}
+                                style={{
+                                  width: '46px',
+                                  height: '46px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  borderRadius: '12px',
+                                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                                  background: isFavorite(selectedSearchFood.name) ? 'rgba(255, 184, 0, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                                  color: isFavorite(selectedSearchFood.name) ? '#ffb800' : 'rgba(255, 255, 255, 0.8)',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                }}
+                              >
+                                <Star size={20} fill={isFavorite(selectedSearchFood.name) ? "#ffb800" : "none"} />
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Bottom Actions for Food Scanner Mode */}
             {scannerMode === 'camera' && !scanResult && !isScanning && (

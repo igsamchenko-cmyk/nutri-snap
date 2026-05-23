@@ -171,3 +171,73 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
     throw error;
   }
 }
+
+export async function estimateFoodNutritionByName(foodName, apiKey, modelName = 'gemini-2.5-flash') {
+  if (!apiKey) {
+    throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
+  }
+  const trimmedKey = apiKey.trim();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
+
+  const promptText = `
+    Проаналізуй назву страви або продукту харчування: "${foodName}".
+    Оціни її типову харчову цінність на 100 грамів:
+    калорійність (ккал), білки (г), жири (г) та вуглеводи (г).
+    Також визнач типову вагу однієї порції цієї страви в грамах та її інгредієнти.
+    
+    Ти ПОВИНЕН повернути відповідь виключно у форматі JSON українською мовою з наступними полями:
+    - "name": Назва страви або продукту (наприклад: "Шаурма з куркою")
+    - "calories": Калорійність на 100г у ккал (ціле число)
+    - "protein": Білки на 100г в грамах (число, округлене до 1 знака)
+    - "fat": Жири на 100г в грамах (число, округлене до 1 знака)
+    - "carbs": Вуглеводи на 100г в грамах (число, округлене до 1 знака)
+    - "weight": Типова вага порції в грамах (ціле число, наприклад: 300)
+    - "ingredients": Основні інгредієнти одним реченням
+    - "icon": Відповідний смайлик-емодзі для цієї страви (наприклад: "🌯")
+
+    Формат відповіді має бути чистим JSON об'єктом, без markdown розмітки на кшталт \`\`\`json.
+  `;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: promptText }
+        ]
+      }
+    ],
+    generationConfig: {
+      responseMimeType: "application/json"
+    }
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw handleGeminiError(response, errorData);
+    }
+
+    const data = await response.json();
+    const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textResponse) {
+      throw new Error("ШІ не зміг згенерувати відповідь для цієї назви страви.");
+    }
+
+    const parsedData = JSON.parse(textResponse);
+    return parsedData;
+  } catch (error) {
+    console.error("Error in estimateFoodNutritionByName:", error);
+    if (error instanceof SyntaxError) {
+      throw new Error("Не вдалося розпарсити відповідь від ШІ. Спробуйте ще раз.");
+    }
+    throw error;
+  }
+}
