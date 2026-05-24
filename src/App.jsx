@@ -28,9 +28,7 @@ import {
   Search,
   X
 } from 'lucide-react';
-import { mockFoods } from './data/mockFood';
-import { analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSupermarketProducts } from './services/geminiService';
-import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
+import { analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSmartProducts } from './services/geminiService';
 
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
@@ -569,9 +567,9 @@ export default function App() {
         ].some(keyword => queryLower.includes(keyword));
 
         // Якщо в базі OFF нічого не знайдено, або запит явно містить супермаркетні ключі,
-        // і є введений API-ключ Gemini, запускаємо пошук ШІ
+        // і є введений API-ключ Gemini, запускаємо розумний пошук ШІ
         if (apiKey && apiKey.trim() !== '' && (results.length === 0 || hasSupermarketKeyword)) {
-          triggerAISupermarketSearch(searchQuery);
+          triggerAISmartSearch(searchQuery);
         }
       } catch (err) {
         console.error("Error in live search query:", err);
@@ -1366,41 +1364,7 @@ export default function App() {
     changeTab(previousTab || 'dashboard');
   };
 
-  const handleAIFoodEstimation = async () => {
-    if (!searchQuery || !searchQuery.trim()) return;
-    if (!apiKey) {
-      showToast("Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях для оцінки страв через ШІ.", "error");
-      return;
-    }
-
-    setIsAIEstimating(true);
-    try {
-      const estimatedResult = await estimateFoodNutritionByName(searchQuery, apiKey, geminiModel);
-      if (estimatedResult) {
-        setSelectedSearchFood({
-          id: 'ai-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
-          name: estimatedResult.name,
-          brand: "Оцінка ШІ Gemini",
-          calories: Number(estimatedResult.calories) || 0,
-          protein: Number(estimatedResult.protein) || 0,
-          fat: Number(estimatedResult.fat) || 0,
-          carbs: Number(estimatedResult.carbs) || 0,
-          weight: Number(estimatedResult.weight) || 100,
-          icon: estimatedResult.icon || "🔮",
-          ingredients: estimatedResult.ingredients || ""
-        });
-        setSearchFoodWeight(Number(estimatedResult.weight) || 100);
-        showToast("ШІ успішно вирахував КБЖВ для страви!", "success");
-      }
-    } catch (err) {
-      console.error("Error estimating food nutrition via Gemini:", err);
-      showToast(err.message || "Помилка при роботі з ШІ. Спробуйте ще раз.", "error");
-    } finally {
-      setIsAIEstimating(false);
-    }
-  };
-
-  const triggerAISupermarketSearch = async (queryToSearch) => {
+  const triggerAISmartSearch = async (queryToSearch) => {
     if (!queryToSearch || !queryToSearch.trim()) return;
     if (!apiKey || apiKey.trim() === '') return;
     
@@ -1410,7 +1374,7 @@ export default function App() {
     setLastAISearchQuery(cleanQuery);
     setIsSearchingAI(true);
     try {
-      const results = await searchSupermarketProducts(cleanQuery, apiKey, geminiModel);
+      const results = await searchSmartProducts(cleanQuery, apiKey, geminiModel);
       const formattedResults = (results || []).map(p => ({
         id: p.id || 'ai-market-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
         name: p.name,
@@ -1426,18 +1390,10 @@ export default function App() {
       }));
       setAiSearchFoods(formattedResults);
     } catch (err) {
-      console.error("Error in AI supermarket search:", err);
+      console.error("Error in AI smart search:", err);
     } finally {
       setIsSearchingAI(false);
     }
-  };
-
-  const handleManualAISupermarketSearch = () => {
-    if (!apiKey || apiKey.trim() === '') {
-      showToast("Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях для пошуку через ШІ.", "error");
-      return;
-    }
-    triggerAISupermarketSearch(searchQuery);
   };
 
   // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
@@ -3014,76 +2970,7 @@ export default function App() {
                   })()}
                 </div>
 
-                {/* AI Action Bars */}
-                {searchQuery.trim().length >= 2 && (
-                  <div style={{ padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {/* Кнопка ШІ-пошуку в супермаркетах */}
-                    <button
-                      className="btn-primary"
-                      onClick={handleManualAISupermarketSearch}
-                      disabled={isSearchingAI}
-                      style={{
-                        width: '100%',
-                        padding: '12px',
-                        borderRadius: '14px',
-                        background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%)',
-                        border: 'none',
-                        color: 'white',
-                        fontWeight: 600,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        boxShadow: '0 4px 12px rgba(139, 92, 246, 0.2)'
-                      }}
-                    >
-                      {isSearchingAI ? (
-                        <>
-                          <RefreshCw className="spin" size={16} />
-                          <span>Шукаємо в АТБ, Сільпо, Рукавичка, Близенько...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles size={16} />
-                          <span>🛒 Пошук ШІ в АТБ, Сільпо, Рукавичка, Близенько</span>
-                        </>
-                      )}
-                    </button>
 
-                    {/* Кнопка ШІ-оцінки цілої страви */}
-                    <button
-                      className="btn-primary"
-                      onClick={handleAIFoodEstimation}
-                      disabled={isAIEstimating}
-                      style={{
-                        width: '100%',
-                        padding: '12px',
-                        borderRadius: '14px',
-                        background: 'linear-gradient(135deg, #6366f1 0%, #10b981 100%)',
-                        border: 'none',
-                        color: 'white',
-                        fontWeight: 600,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        boxShadow: '0 4px 12px rgba(99, 102, 241, 0.2)'
-                      }}
-                    >
-                      {isAIEstimating ? (
-                        <>
-                          <RefreshCw className="spin" size={16} />
-                          <span>ШІ аналізує страву «{searchQuery}»...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles size={16} />
-                          <span>🔮 Оцінити страву «{searchQuery}» через ШІ Gemini</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
 
                 {/* Filter Chips */}
                 <div className="filter-chips-container">

@@ -154,18 +154,18 @@ body.light-mode .app-container::after {
     border: none;
   }
   .app-header {
-    padding-top: calc(28px + env(safe-area-inset-top, 0px)); /* Усунення перекриття статус-баром/вирізом */
+    padding-top: calc(env(safe-area-inset-top, 20px) + 24px); /* Збільшений відступ для статус-бару */
   }
   .bottom-nav {
     position: absolute;
-    bottom: calc(28px + env(safe-area-inset-bottom, 0px)); /* Усунення перекриття віртуальними кнопками телефона */
+    bottom: calc(env(safe-area-inset-bottom, 24px) + 36px); /* Збільшений відступ для панелі навігації Android/iOS */
   }
   .scan-fab {
     position: absolute;
-    bottom: calc(31px + env(safe-area-inset-bottom, 0px)); /* Центрування відносно зміщеної навігаційної панелі */
+    bottom: calc(env(safe-area-inset-bottom, 24px) + 40px); /* Відповідно до навігації */
   }
   .app-content {
-    padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px)); /* Захист останніх елементів списку від перекриття */
+    padding-bottom: calc(env(safe-area-inset-bottom, 24px) + 140px); /* Захист останніх елементів списку */
   }
 }
 
