@@ -566,9 +566,9 @@ export default function App() {
           'кухарочка'
         ].some(keyword => queryLower.includes(keyword));
 
-        // Якщо в базі OFF нічого не знайдено, або запит явно містить супермаркетні ключі,
-        // і є введений API-ключ Gemini, запускаємо розумний пошук ШІ
-        if (apiKey && apiKey.trim() !== '' && (results.length === 0 || hasSupermarketKeyword)) {
+        // Якщо є введений API-ключ Gemini, завжди запускаємо розумний пошук ШІ паралельно з OFF,
+        // щоб одразу отримувати сорти та варіації (яблуко Голден, Гала тощо)
+        if (apiKey && apiKey.trim() !== '') {
           triggerAISmartSearch(searchQuery);
         }
       } catch (err) {

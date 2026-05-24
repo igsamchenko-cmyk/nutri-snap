@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nutrisnap-cache-v50';
+const CACHE_NAME = 'nutrisnap-cache-v51';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
