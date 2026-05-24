@@ -27,6 +27,10 @@ export async function getProductByBarcode(barcode) {
   
   const response = await fetch(url);
 
+  if (response.status === 404) {
+    throw new Error("Продукт із таким штрих-кодом не знайдено у базі даних.");
+  }
+
   if (!response.ok) {
     throw new Error("Не вдалося підключитися до бази даних продуктів. Спробуйте пізніше.");
   }

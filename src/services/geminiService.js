@@ -7,7 +7,9 @@ function handleGeminiError(response, errorData) {
   const apiErrorMessage = errorData.error?.message || "";
   console.error("Gemini API Error details:", errorData);
   
-  if (response.status === 403 || apiErrorMessage.toLowerCase().includes("api key")) {
+  if (response.status === 429 || apiErrorMessage.toLowerCase().includes("quota") || apiErrorMessage.toLowerCase().includes("exhausted") || apiErrorMessage.toLowerCase().includes("rate limit")) {
+    return new Error("Перевищено ліміти або квоту запитів ШІ (Помилка 429 / Resource Exhausted). На безкоштовному тарифі діє ліміт (зазвичай 15 запитів на хвилину або добові ліміти). Будь ласка, зачекайте 1-2 хвилини і спробуйте знову.");
+  } else if (response.status === 403 || apiErrorMessage.toLowerCase().includes("api key")) {
     return new Error("Невірний API-ключ або обмежений доступ. Будь ласка, перевірте правильність вашого Gemini API-ключа в налаштуваннях.");
   } else if (response.status === 400) {
     return new Error(apiErrorMessage || "Невірний запит до API. Перевірте формат або модель.");
@@ -237,6 +239,164 @@ export async function estimateFoodNutritionByName(foodName, apiKey, modelName = 
     console.error("Error in estimateFoodNutritionByName:", error);
     if (error instanceof SyntaxError) {
       throw new Error("Не вдалося розпарсити відповідь від ШІ. Спробуйте ще раз.");
+    }
+    throw error;
+  }
+}
+
+export async function analyzeProductPackagingImage(base64Data, apiKey, modelName = 'gemini-2.5-flash') {
+  if (!apiKey) {
+    throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
+  }
+  const trimmedKey = apiKey.trim();
+  const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
+
+  const promptText = `
+    Проаналізуй це зображення упаковки продукту харчування (зокрема таблицю харчової цінності або опис КБЖВ).
+    Твоє завдання:
+    1. Визначити назву продукту та бренд (наприклад, "Agrola - Хліб зерновий").
+    2. Знайти калорійність (ккал), білки (г), жири (г) та вуглеводи (г) НА 100г продукту.
+    3. Знайти загальну вагу упаковки або типову порцію в грамах (якщо вказано, інакше поверни 100).
+    4. Зчитати склад/інгредієнти одним реченням.
+    
+    Ти ПОВИНЕН повернути відповідь виключно у форматі JSON українською мовою з наступними полями:
+    - "name": Назва продукту разом з брендом
+    - "calories": Калорійність на 100г у ккал (ціле число)
+    - "protein": Білки на 100г в грамах (число, огруглене до 1 знака)
+    - "fat": Жири на 100г в грамах (число, огруглене до 1 знака)
+    - "carbs": Вуглеводи на 100г в грамах (число, огруглене до 1 знака)
+    - "weight": Загальна вага упаковки або порції в грамах (ціле число, за замовчуванням 100)
+    - "ingredients": Склад продукту (одним реченням, або null якщо не вказано)
+    
+    Формат відповіді має бути чистим JSON об'єктом, без markdown розмітки на кшталт \`\`\`json.
+  `;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: promptText },
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: base64ImageBytes
+            }
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      responseMimeType: "application/json"
+    }
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw handleGeminiError(response, errorData);
+    }
+
+    const data = await response.json();
+    const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textResponse) {
+      throw new Error("ШІ не зміг згенерувати відповідь для цього зображення.");
+    }
+
+    const parsedData = JSON.parse(textResponse);
+    return parsedData;
+  } catch (error) {
+    console.error("Error in analyzeProductPackagingImage:", error);
+    if (error instanceof SyntaxError) {
+      throw new Error("Не вдалося розпарсити відповідь від ШІ. Спробуйте ще раз.");
+    }
+    throw error;
+  }
+}
+
+export async function searchSupermarketProducts(query, apiKey, modelName = 'gemini-2.5-flash') {
+  if (!apiKey) {
+    throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
+  }
+  const trimmedKey = apiKey.trim();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
+
+  const promptText = `
+    Ти — інтелектуальний пошуковий помічник по продуктах харчування в українських супермаркетах: АТБ, Сільпо, Рукавичка, Близенько.
+    Знайди або згенеруй найбільш релевантні реальні товари для пошукового запиту: "${query}".
+    
+    Зосередься на власних торгових марках (ВТМ) та популярних брендах цих мереж:
+    - АТБ: "Своя Лінія", "Розумний Вибір", "De Luxe F&G"
+    - Сільпо: "Премія", "Повна Чаша", "Лавка Традицій", "Премія Select"
+    - Рукавичка: "Кухарочка", "Торгова марка Рукавичка", "То Треба"
+    - Близенько: товари з брендом "Близенько" або типові продукти цієї мережі
+    
+    Для кожного знайденого/визначеного продукту вкажи точні або максимально наближені до офіційних дані КБЖВ на 100г.
+    Поверни від 3 до 5 найбільш релевантних продуктів.
+    
+    Ти ПОВИНЕН повернути відповідь виключно у форматі JSON (масив об'єктів) українською мовою з наступними полями для кожного продукту:
+    - "id": Унікальний рядок-ідентифікатор (наприклад: "ai-atb-123")
+    - "name": Повна назва продукту з назвою бренду (наприклад: "Сир кисломолочний 9% 'Своя Лінія'")
+    - "supermarket": Назва супермаркету, де він продається (одне з: "АТБ", "Сільпо", "Рукавичка", "Близенько", або "Загальний")
+    - "brand": Конкретний бренд/ВТМ (наприклад: "Своя Лінія", "Премія", "Кухарочка", "Розумний Вибір", або інший бренд)
+    - "calories": Калорійність на 100г у ккал (ціле число)
+    - "protein": Білки на 100г в грамах (число, округлене до 1 знака)
+    - "fat": Жири на 100г в грамах (число, округлене до 1 знака)
+    - "carbs": Вуглеводи на 100г в грамах (число, округлене до 1 знака)
+    - "weight": Стандартна вага упаковки в грамах (ціле число, наприклад: 400, 200, 900)
+    - "ingredients": Склад продукту або основні інгредієнти одним реченням
+    - "icon": Відповідний смайлик-емодзі для цього продукту (наприклад: "🧀", "🥛", "🍞")
+
+    Формат відповіді має бути чистим JSON масивом об'єктів, без markdown розмітки на кшталт \`\`\`json. Якщо нічого не знайдено, поверни порожній масив [].
+  `;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: promptText }
+        ]
+      }
+    ],
+    generationConfig: {
+      responseMimeType: "application/json"
+    }
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw handleGeminiError(response, errorData);
+    }
+
+    const data = await response.json();
+    const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textResponse) {
+      throw new Error("ШІ не зміг згенерувати відповідь для пошуку продуктів.");
+    }
+
+    const parsedData = JSON.parse(textResponse);
+    return Array.isArray(parsedData) ? parsedData : [];
+  } catch (error) {
+    console.error("Error in searchSupermarketProducts:", error);
+    if (error instanceof SyntaxError) {
+      return [];
     }
     throw error;
   }

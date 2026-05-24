@@ -29,7 +29,7 @@ import {
   X
 } from 'lucide-react';
 import { mockFoods } from './data/mockFood';
-import { analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName } from './services/geminiService';
+import { analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSupermarketProducts } from './services/geminiService';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
@@ -95,7 +95,10 @@ export default function App() {
   const [searchFoodWeight, setSearchFoodWeight] = useState(100);
   const [searchMealCategory, setSearchMealCategory] = useState('Сніданок');
   const [externalSearchFoods, setExternalSearchFoods] = useState([]);
+  const [aiSearchFoods, setAiSearchFoods] = useState([]);
   const [isSearchingExternal, setIsSearchingExternal] = useState(false);
+  const [isSearchingAI, setIsSearchingAI] = useState(false);
+  const [lastAISearchQuery, setLastAISearchQuery] = useState('');
   const [isAIEstimating, setIsAIEstimating] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isNativeScannerSupported] = useState(() => 'BarcodeDetector' in window);
@@ -345,6 +348,45 @@ export default function App() {
   const [barcodeError, setBarcodeError] = useState(null);
   const [isBarcodeScanning, setIsBarcodeScanning] = useState(false);
 
+  // --- States for Custom Barcodes & Custom Foods ---
+  const [customBarcodes, setCustomBarcodes] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nutrisnap_custom_barcodes');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      console.error("Failed to load custom barcodes:", e);
+      return {};
+    }
+  });
+
+  const [customFoods, setCustomFoods] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nutrisnap_custom_foods');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Failed to load custom foods:", e);
+      return [];
+    }
+  });
+
+  const [isCustomFoodModalOpen, setIsCustomFoodModalOpen] = useState(false);
+  const [customFoodName, setCustomFoodName] = useState('');
+  const [customFoodCalories, setCustomFoodCalories] = useState('');
+  const [customFoodProtein, setCustomFoodProtein] = useState('');
+  const [customFoodFat, setCustomFoodFat] = useState('');
+  const [customFoodCarbs, setCustomFoodCarbs] = useState('');
+  const [customFoodWeight, setCustomFoodWeight] = useState('100');
+
+  // Fallback states for when a scanned barcode is not found
+  const [barcodeNotFound, setBarcodeNotFound] = useState(null); // stores the scanned barcode string
+  const [isBarcodeNotFoundModalOpen, setIsBarcodeNotFoundModalOpen] = useState(false);
+  const [fallbackName, setFallbackName] = useState('');
+  const [fallbackCalories, setFallbackCalories] = useState('');
+  const [fallbackProtein, setFallbackProtein] = useState('');
+  const [fallbackFat, setFallbackFat] = useState('');
+  const [fallbackCarbs, setFallbackCarbs] = useState('');
+  const [fallbackWeight, setFallbackWeight] = useState('100');
+
   // Calendar and Structured Meal States
   const [preselectedCategory, setPreselectedCategory] = useState(null);
   const [scannedMealCategory, setScannedMealCategory] = useState('Сніданок');
@@ -457,6 +499,14 @@ export default function App() {
     }
   }, [theme]);
 
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_custom_barcodes', JSON.stringify(customBarcodes));
+  }, [customBarcodes]);
+
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_custom_foods', JSON.stringify(customFoods));
+  }, [customFoods]);
+
   // Захист від фантомних натискань (ghost click protection) при відкритті сканера або зміні режимів
   useEffect(() => {
     if (activeTab === 'scanner') {
@@ -488,11 +538,13 @@ export default function App() {
     return () => stopCamera();
   }, [activeTab, scannerMode]);
 
-  // Дебоунс-пошук продуктів в Open Food Facts API при введенні запиту
+  // Дебоунс-пошук продуктів в Open Food Facts API та автоматичний AI-пошук
   useEffect(() => {
     if (activeTab !== 'scanner' || scannerMode !== 'search' || !searchQuery || searchQuery.trim().length < 2) {
       setExternalSearchFoods([]);
+      setAiSearchFoods([]);
       setIsSearchingExternal(false);
+      setIsSearchingAI(false);
       return;
     }
 
@@ -501,6 +553,26 @@ export default function App() {
       try {
         const results = await searchProductsByName(searchQuery);
         setExternalSearchFoods(results);
+
+        // Перевіряємо, чи містить запит ключові слова українських супермаркетів
+        const queryLower = searchQuery.toLowerCase();
+        const hasSupermarketKeyword = [
+          'атб', 'atb', 
+          'сільпо', 'сильпо', 'silpo', 
+          'рукавичка', 'rukavychka', 
+          'близенько', 'blyzenko',
+          'своя лінія', 'своя линия',
+          'розумний вибір', 'умний вибір', 'розумний вибир',
+          'премія', 'премия',
+          'повна чаша',
+          'кухарочка'
+        ].some(keyword => queryLower.includes(keyword));
+
+        // Якщо в базі OFF нічого не знайдено, або запит явно містить супермаркетні ключі,
+        // і є введений API-ключ Gemini, запускаємо пошук ШІ
+        if (apiKey && apiKey.trim() !== '' && (results.length === 0 || hasSupermarketKeyword)) {
+          triggerAISupermarketSearch(searchQuery);
+        }
       } catch (err) {
         console.error("Error in live search query:", err);
       } finally {
@@ -509,7 +581,7 @@ export default function App() {
     }, 600); // 600ms debounce
 
     return () => clearTimeout(delayTimer);
-  }, [searchQuery, activeTab, scannerMode]);
+  }, [searchQuery, activeTab, scannerMode, apiKey]);
 
   // --- Camera Operations ---
   const startCamera = async () => {
@@ -647,7 +719,7 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const base64Data = canvas.toDataURL('image/jpeg');
+    const base64Data = canvas.toDataURL('image/jpeg', 0.7);
     triggerScan(base64Data);
   };
 
@@ -815,12 +887,24 @@ export default function App() {
     setActiveTab('dashboard');
   };
 
+  // Спроба отримати продукт з локальної бази кастомних штрих-кодів або з Open Food Facts
+  const resolveBarcodeProduct = async (barcodeVal) => {
+    const cleanBarcode = barcodeVal.trim();
+    if (customBarcodes && customBarcodes[cleanBarcode]) {
+      console.log("Знайдено продукт в локальній базі штрих-кодів:", customBarcodes[cleanBarcode]);
+      return customBarcodes[cleanBarcode];
+    }
+    return await getProductByBarcode(cleanBarcode);
+  };
+
   // Запуск аналізу штрих-коду ШІ
   const triggerBarcodeScan = async (imageDataBase64) => {
     setIsBarcodeScanning(true);
     setBarcodeError(null);
     setBarcodeResult(null);
+    setBarcodeNotFound(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
+    let detectedBarcode = null;
     try {
       if (!apiKey || apiKey.trim() === '') {
         throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
@@ -831,10 +915,11 @@ export default function App() {
         throw new Error("Не вдалося розпізнати штрих-код на фото. Спробуйте інший ракурс або введіть його вручну.");
       }
 
+      detectedBarcode = barcodeVal;
       setBarcodeInput(barcodeVal);
       
       setBarcodeLoading(true);
-      const product = await getProductByBarcode(barcodeVal);
+      const product = await resolveBarcodeProduct(barcodeVal);
       setBarcodeResult(product);
       const w = product.weight || 100;
       setBarcodeEditedWeight(w);
@@ -846,6 +931,15 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setBarcodeError(err.message || "Помилка при зчитуванні штрих-коду.");
+      if (detectedBarcode) {
+        setBarcodeNotFound(detectedBarcode);
+        setFallbackName('');
+        setFallbackCalories('');
+        setFallbackProtein('');
+        setFallbackFat('');
+        setFallbackCarbs('');
+        setFallbackWeight('100');
+      }
     } finally {
       setIsBarcodeScanning(false);
       setBarcodeLoading(false);
@@ -869,7 +963,7 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const base64Data = canvas.toDataURL('image/jpeg');
+    const base64Data = canvas.toDataURL('image/jpeg', 0.7);
     triggerBarcodeScan(base64Data);
   };
 
@@ -880,10 +974,11 @@ export default function App() {
     setBarcodeLoading(true);
     setBarcodeError(null);
     setBarcodeResult(null);
+    setBarcodeNotFound(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     
     try {
-      const product = await getProductByBarcode(barcodeVal);
+      const product = await resolveBarcodeProduct(barcodeVal);
       setBarcodeResult(product);
       const w = product.weight || 100;
       setBarcodeEditedWeight(w);
@@ -901,9 +996,117 @@ export default function App() {
     } catch (err) {
       console.error("Direct barcode search error:", err);
       setBarcodeError(err.message || "Не вдалося знайти товар за цим штрих-кодом.");
+      setBarcodeNotFound(barcodeVal);
+      setFallbackName('');
+      setFallbackCalories('');
+      setFallbackProtein('');
+      setFallbackFat('');
+      setFallbackCarbs('');
+      setFallbackWeight('100');
     } finally {
       setBarcodeLoading(false);
     }
+  };
+
+  // Збереження нового продукту вручну без штрих-коду
+  const handleSaveCustomFood = () => {
+    if (!customFoodName.trim()) {
+      showToast("Будь ласка, введіть назву продукту", "error");
+      return;
+    }
+
+    const kcalVal = Number(customFoodCalories) || 0;
+    const proteinVal = Number(customFoodProtein) || 0;
+    const fatVal = Number(customFoodFat) || 0;
+    const carbsVal = Number(customFoodCarbs) || 0;
+    const defaultWeightVal = Number(customFoodWeight) || 100;
+
+    // Створюємо продукт, приведений до 100г
+    const scaleTo100 = defaultWeightVal > 0 ? (100 / defaultWeightVal) : 1;
+    const newFood = {
+      id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      name: customFoodName.trim(),
+      calories: Math.round(kcalVal * scaleTo100),
+      protein: Math.round(proteinVal * scaleTo100 * 10) / 10,
+      fat: Math.round(fatVal * scaleTo100 * 10) / 10,
+      carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
+      weight: 100, // Базові нутрієнти зберігаємо на 100г
+      brand: "Мій продукт",
+      icon: "🏷️"
+    };
+
+    setCustomFoods(prev => [newFood, ...prev]);
+
+    // Скидаємо форму
+    setCustomFoodName('');
+    setCustomFoodCalories('');
+    setCustomFoodProtein('');
+    setCustomFoodFat('');
+    setCustomFoodCarbs('');
+    setCustomFoodWeight('100');
+    setIsCustomFoodModalOpen(false);
+
+    showToast(`Продукт "${newFood.name}" створено та збережено!`, "success");
+
+    // Відразу відкриваємо діалог додавання до щоденника
+    setSelectedSearchFood(newFood);
+    setSearchFoodWeight(defaultWeightVal);
+    setSearchMealCategory(getDefaultCategory());
+  };
+
+  // Збереження нового продукту для раніше невідомого штрих-коду
+  const handleSaveCustomBarcode = () => {
+    if (!fallbackName.trim()) {
+      showToast("Будь ласка, введіть назву продукту", "error");
+      return;
+    }
+    if (!barcodeNotFound) return;
+
+    const kcalVal = Number(fallbackCalories) || 0;
+    const proteinVal = Number(fallbackProtein) || 0;
+    const fatVal = Number(fallbackFat) || 0;
+    const carbsVal = Number(fallbackCarbs) || 0;
+    const defaultWeightVal = Number(fallbackWeight) || 100;
+
+    const scaleTo100 = defaultWeightVal > 0 ? (100 / defaultWeightVal) : 1;
+    const newProduct = {
+      barcode: barcodeNotFound,
+      name: fallbackName.trim(),
+      calories: Math.round(kcalVal * scaleTo100),
+      protein: Math.round(proteinVal * scaleTo100 * 10) / 10,
+      fat: Math.round(fatVal * scaleTo100 * 10) / 10,
+      carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
+      weight: 100, // Базові нутрієнти зберігаємо на 100г
+      brand: "Мій продукт",
+      icon: "🏷️"
+    };
+
+    setCustomBarcodes(prev => ({
+      ...prev,
+      [barcodeNotFound]: newProduct
+    }));
+
+    setFallbackName('');
+    setFallbackCalories('');
+    setFallbackProtein('');
+    setFallbackFat('');
+    setFallbackCarbs('');
+    setFallbackWeight('100');
+    setIsBarcodeNotFoundModalOpen(false);
+    setBarcodeNotFound(null);
+
+    showToast(`Продукт успішно збережено для штрих-коду ${barcodeNotFound}!`, "success");
+
+    // Відразу відкриваємо результат штрих-коду
+    setBarcodeResult(newProduct);
+    setBarcodeEditedWeight(defaultWeightVal);
+    setBarcodeMealCategory(getDefaultCategory());
+    
+    // Встановлюємо значення макросів для поточної ваги
+    setBarcodeScannedCalories(kcalVal);
+    setBarcodeScannedProtein(proteinVal);
+    setBarcodeScannedFat(fatVal);
+    setBarcodeScannedCarbs(carbsVal);
   };
 
   // Автоматичне сканування штрих-коду за допомогою вбудованого BarcodeDetector API (якщо підтримується браузером)
@@ -1034,7 +1237,21 @@ export default function App() {
     const fVal = f === '' ? 0 : (parseFloat(f) || 0);
     const cVal = c === '' ? 0 : (parseFloat(c) || 0);
     
-    setBarcodeScannedCalories(Math.round(pVal * 4 + fVal * 9 + cVal * 4));
+    const caloriesVal = Math.round(pVal * 4 + fVal * 9 + cVal * 4);
+    setBarcodeScannedCalories(caloriesVal);
+
+    if (barcodeResult) {
+      const portionWeight = Number(barcodeEditedWeight) || 100;
+      const scaleTo100 = portionWeight > 0 ? (100 / portionWeight) : 1;
+      
+      setBarcodeResult(prev => ({
+        ...prev,
+        protein: Math.round(pVal * scaleTo100 * 10) / 10,
+        fat: Math.round(fVal * scaleTo100 * 10) / 10,
+        carbs: Math.round(cVal * scaleTo100 * 10) / 10,
+        calories: Math.round(caloriesVal * scaleTo100)
+      }));
+    }
   };
 
   // Обробник ручної зміни ваги порції для штрих-коду з масштабуванням КБЖВ
@@ -1183,7 +1400,66 @@ export default function App() {
     }
   };
 
-  const filteredSearchFoods = mockFoods.filter(food => {
+  const triggerAISupermarketSearch = async (queryToSearch) => {
+    if (!queryToSearch || !queryToSearch.trim()) return;
+    if (!apiKey || apiKey.trim() === '') return;
+    
+    const cleanQuery = queryToSearch.trim();
+    if (cleanQuery.toLowerCase() === lastAISearchQuery.toLowerCase()) return;
+    
+    setLastAISearchQuery(cleanQuery);
+    setIsSearchingAI(true);
+    try {
+      const results = await searchSupermarketProducts(cleanQuery, apiKey, geminiModel);
+      const formattedResults = (results || []).map(p => ({
+        id: p.id || 'ai-market-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+        name: p.name,
+        brand: p.brand || p.supermarket || "ШІ Пошук",
+        supermarket: p.supermarket || "Загальний",
+        calories: Number(p.calories) || 0,
+        protein: Number(p.protein) || 0,
+        fat: Number(p.fat) || 0,
+        carbs: Number(p.carbs) || 0,
+        weight: Number(p.weight) || 100,
+        ingredients: p.ingredients || null,
+        icon: p.icon || "🔮"
+      }));
+      setAiSearchFoods(formattedResults);
+    } catch (err) {
+      console.error("Error in AI supermarket search:", err);
+    } finally {
+      setIsSearchingAI(false);
+    }
+  };
+
+  const handleManualAISupermarketSearch = () => {
+    if (!apiKey || apiKey.trim() === '') {
+      showToast("Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях для пошуку через ШІ.", "error");
+      return;
+    }
+    triggerAISupermarketSearch(searchQuery);
+  };
+
+  // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
+  const combinedFoods = [
+    ...mockFoods,
+    ...customFoods.map(f => ({ 
+      ...f, 
+      isCustom: true, 
+      id: f.id || `custom-${f.name}-${Date.now()}`,
+      brand: f.brand || "Мій продукт",
+      icon: "🏷️"
+    })),
+    ...Object.values(customBarcodes).map(f => ({ 
+      ...f, 
+      isCustomBarcode: true, 
+      id: f.id || `barcode-${f.barcode}`,
+      brand: f.brand || "Штрих-код",
+      icon: "🏷️"
+    }))
+  ];
+
+  const filteredSearchFoods = combinedFoods.filter(food => {
     const matchesQuery = food.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                          (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()));
     if (!matchesQuery) return false;
@@ -1226,6 +1502,18 @@ export default function App() {
       return favorites.some(fav => fav.name === food.name);
     }
     return true;
+  });
+
+  const filteredExternalSearchFoods = externalSearchFoods.filter(food => {
+    if (selectedCategoryFilter === 'Усі') return true;
+    if (selectedCategoryFilter === 'Супермаркети') return true;
+    return false;
+  });
+
+  const filteredAiSearchFoods = aiSearchFoods.filter(food => {
+    if (selectedCategoryFilter === 'Усі') return true;
+    if (selectedCategoryFilter === 'Супермаркети') return true;
+    return false;
   });
   // Оновлення ваги страви з пропорційним перерахунком КБЖВ
   const handleUpdateMealWeight = (mealId, value) => {
@@ -1599,7 +1887,11 @@ export default function App() {
                         <span className="macro-dot dot-protein"></span>
                         Білки
                       </span>
-                      <span className="macro-bar-value">{totals.protein}г / {profile.targetProtein}г</span>
+                      <span className="macro-bar-value">
+                        <span className="macro-val-current">{totals.protein}г</span>
+                        <span className="macro-val-divider">/</span>
+                        <span className="macro-val-target">{profile.targetProtein}г</span>
+                      </span>
                     </div>
                     <div className="macro-bar-track">
                       <div 
@@ -1616,7 +1908,11 @@ export default function App() {
                         <span className="macro-dot dot-fat"></span>
                         Жири
                       </span>
-                      <span className="macro-bar-value">{totals.fat}г / {profile.targetFat}г</span>
+                      <span className="macro-bar-value">
+                        <span className="macro-val-current">{totals.fat}г</span>
+                        <span className="macro-val-divider">/</span>
+                        <span className="macro-val-target">{profile.targetFat}г</span>
+                      </span>
                     </div>
                     <div className="macro-bar-track">
                       <div 
@@ -1633,7 +1929,11 @@ export default function App() {
                         <span className="macro-dot dot-carbs"></span>
                         Вуглеводи
                       </span>
-                      <span className="macro-bar-value">{totals.carbs}г / {profile.targetCarbs}г</span>
+                      <span className="macro-bar-value">
+                        <span className="macro-val-current">{totals.carbs}г</span>
+                        <span className="macro-val-divider">/</span>
+                        <span className="macro-val-target">{profile.targetCarbs}г</span>
+                      </span>
                     </div>
                     <div className="macro-bar-track">
                       <div 
@@ -2337,7 +2637,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {cameraActive && !isBarcodeScanning && !barcodeLoading && !barcodeResult && (
+                  {cameraActive && !isBarcodeScanning && !barcodeLoading && !barcodeResult && !barcodeNotFound && (
                     <div className="scanner-overlay">
                       <div className="scanner-instruction-label">
                         {isNativeScannerSupported 
@@ -2539,6 +2839,69 @@ export default function App() {
                       </div>
                     </div>
                   )}
+
+                  {barcodeNotFound && (
+                    <div className="scan-result-card" style={{ zIndex: 100, background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                      <button 
+                        onClick={() => {
+                          setBarcodeNotFound(null);
+                          setBarcodeInput('');
+                          setBarcodeError(null);
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: '16px',
+                          right: '16px',
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          border: 'none',
+                          color: '#fff',
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          zIndex: 100
+                        }}
+                        title="Закрити"
+                      >
+                        <X size={16} />
+                      </button>
+                      <div className="results-header" style={{ marginBottom: '8px' }}>
+                        <div className="barcode-product-info" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                          <div className="barcode-product-image" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', width: '56px', height: '56px', borderRadius: '12px' }}>
+                            <AlertCircle size={28} />
+                          </div>
+                          <div style={{ textAlign: 'left' }}>
+                            <span className="match-badge" style={{ background: '#ef4444', color: '#fff' }}>Невідомий штрих-код</span>
+                            <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px', color: '#f1f5f9' }}>{barcodeNotFound}</h2>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <p style={{ fontSize: '13px', color: 'var(--text-dark-muted)', marginBottom: '16px', lineHeight: '1.4', textAlign: 'left' }}>
+                        Цього продукту ще немає в нашій базі даних. Ви можете легко внести його назву та КБЖВ на 100 г, щоб додаток автоматично розраховував калорійність та зберігав продукт для майбутнього використання.
+                      </p>
+
+                      <button 
+                        className="btn-primary" 
+                        style={{ width: '100%' }} 
+                        onClick={() => {
+                          setFallbackName('');
+                          setFallbackCalories('');
+                          setFallbackProtein('');
+                          setFallbackFat('');
+                          setFallbackCarbs('');
+                          setFallbackWeight('100');
+                          setIsBarcodeNotFoundModalOpen(true);
+                        }}
+                      >
+                        <Plus size={18} />
+                        Додати продукт в базу
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
               </div>
@@ -2546,6 +2909,24 @@ export default function App() {
 
             {scannerMode === 'search' && (
               <div className="search-db-container">
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                  <button
+                    className="btn-primary"
+                    style={{ flex: 1, padding: '10px 14px', borderRadius: '12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                    onClick={() => {
+                      setCustomFoodName('');
+                      setCustomFoodCalories('');
+                      setCustomFoodProtein('');
+                      setCustomFoodFat('');
+                      setCustomFoodCarbs('');
+                      setCustomFoodWeight('100');
+                      setIsCustomFoodModalOpen(true);
+                    }}
+                  >
+                    <Plus size={16} />
+                    <span>➕ Додати продукт вручну</span>
+                  </button>
+                </div>
                 {/* Search Input Box */}
                 <div className="search-input-wrapper" style={{ position: 'relative' }}>
                   <input
@@ -2572,7 +2953,7 @@ export default function App() {
                   {(() => {
                     if (searchQuery.length === 0 || !showSuggestions) return null;
                     
-                    const suggestions = mockFoods.filter(food => 
+                    const suggestions = combinedFoods.filter(food => 
                       food.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                       (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()))
                     ).slice(0, 6);
@@ -2633,9 +3014,43 @@ export default function App() {
                   })()}
                 </div>
 
-                {/* AI Estimate Bar */}
+                {/* AI Action Bars */}
                 {searchQuery.trim().length >= 2 && (
-                  <div style={{ padding: '0 16px 12px' }}>
+                  <div style={{ padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {/* Кнопка ШІ-пошуку в супермаркетах */}
+                    <button
+                      className="btn-primary"
+                      onClick={handleManualAISupermarketSearch}
+                      disabled={isSearchingAI}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        borderRadius: '14px',
+                        background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%)',
+                        border: 'none',
+                        color: 'white',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        boxShadow: '0 4px 12px rgba(139, 92, 246, 0.2)'
+                      }}
+                    >
+                      {isSearchingAI ? (
+                        <>
+                          <RefreshCw className="spin" size={16} />
+                          <span>Шукаємо в АТБ, Сільпо, Рукавичка, Близенько...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={16} />
+                          <span>🛒 Пошук ШІ в АТБ, Сільпо, Рукавичка, Близенько</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Кнопка ШІ-оцінки цілої страви */}
                     <button
                       className="btn-primary"
                       onClick={handleAIFoodEstimation}
@@ -2692,9 +3107,32 @@ export default function App() {
                     </div>
                   )}
 
-                  {filteredSearchFoods.length === 0 && externalSearchFoods.length === 0 && !isSearchingExternal ? (
-                    <div style={{ textAlign: 'center', color: '#94a3b8', padding: '40px 20px', fontSize: '14px' }}>
-                      Нічого не знайдено за запитом. Спробуйте змінити фільтр або ввести назву страви для оцінки ШІ вище.
+                  {isSearchingAI && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', fontSize: '13px', color: '#a855f7' }}>
+                      <RefreshCw className="spin" size={14} />
+                      <span>Шукаємо ШІ-продукти в АТБ, Сільпо, Рукавичка, Близенько...</span>
+                    </div>
+                  )}
+
+                  {filteredSearchFoods.length === 0 && filteredExternalSearchFoods.length === 0 && filteredAiSearchFoods.length === 0 && !isSearchingExternal && !isSearchingAI ? (
+                    <div style={{ textAlign: 'center', color: '#94a3b8', padding: '40px 20px', fontSize: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                      <span>Нічого не знайдено за запитом. Спробуйте змінити фільтр або запустити пошук ШІ по супермаркетах.</span>
+                      <button
+                        className="btn-primary"
+                        style={{ marginTop: '8px', padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: 'auto' }}
+                        onClick={() => {
+                          setCustomFoodName(searchQuery);
+                          setCustomFoodCalories('');
+                          setCustomFoodProtein('');
+                          setCustomFoodFat('');
+                          setCustomFoodCarbs('');
+                          setCustomFoodWeight('100');
+                          setIsCustomFoodModalOpen(true);
+                        }}
+                      >
+                        <Plus size={16} />
+                        Додати "{searchQuery}" вручну
+                      </button>
                     </div>
                   ) : (
                     <>
@@ -2721,8 +3159,57 @@ export default function App() {
                         </div>
                       ))}
 
+                      {/* AI Supermarket Results */}
+                      {filteredAiSearchFoods.map(food => {
+                        const getSupermarketColor = (supermarket) => {
+                          if (!supermarket) return '#8b5cf6';
+                          const sm = supermarket.toLowerCase();
+                          if (sm.includes('атб') || sm.includes('atb')) return '#3b82f6';
+                          if (sm.includes('сільпо') || sm.includes('silpo')) return '#f97316';
+                          if (sm.includes('рукавичка') || sm.includes('rukavychka')) return '#dc2626';
+                          if (sm.includes('близенько') || sm.includes('blyzenko')) return '#10b981';
+                          return '#8b5cf6';
+                        };
+
+                        const getSupermarketClass = (supermarket) => {
+                          if (!supermarket) return 'supermarket-general';
+                          const sm = supermarket.toLowerCase();
+                          if (sm.includes('атб') || sm.includes('atb')) return 'supermarket-atb';
+                          if (sm.includes('сільпо') || sm.includes('silpo')) return 'supermarket-silpo';
+                          if (sm.includes('рукавичка') || sm.includes('rukavychka')) return 'supermarket-rukavychka';
+                          if (sm.includes('близенько') || sm.includes('blyzenko')) return 'supermarket-blyzenko';
+                          return 'supermarket-general';
+                        };
+
+                        const borderCol = getSupermarketColor(food.supermarket);
+                        const badgeClass = getSupermarketClass(food.supermarket);
+
+                        return (
+                          <div
+                            key={food.id}
+                            className="search-food-item"
+                            style={{ borderLeft: `4px solid ${borderCol}` }}
+                            onClick={() => {
+                              setSelectedSearchFood(food);
+                              setSearchFoodWeight(food.weight);
+                            }}
+                          >
+                            <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🔮'}</span>
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
+                              <span style={{ fontWeight: 600, fontSize: '14px', color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' }}>
+                                {food.name}
+                              </span>
+                              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                                {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                              </span>
+                            </div>
+                            <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket || "ШІ"}</span>
+                          </div>
+                        );
+                      })}
+
                       {/* External Open Food Facts Results */}
-                      {externalSearchFoods.map(food => (
+                      {filteredExternalSearchFoods.map(food => (
                         <div
                           key={food.id}
                           className="search-food-item"
@@ -3723,6 +4210,241 @@ export default function App() {
           </button>
         </nav>
       )}
+      {/* Модальне вікно для створення продукту вручну */}
+      {isCustomFoodModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsCustomFoodModalOpen(false)}>
+          <div className="modal-content glassmorphic-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>➕ Створення продукту вручну</h3>
+              <button className="modal-close-btn" onClick={() => setIsCustomFoodModalOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="settings-group" style={{ textAlign: 'left' }}>
+                <label className="modal-label">Назва продукту:</label>
+                <input 
+                  type="text"
+                  className="modal-input"
+                  placeholder="Наприклад: Вівсянка звичайна"
+                  value={customFoodName}
+                  onChange={(e) => setCustomFoodName(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label">Вага порції (г):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="100"
+                    value={customFoodWeight}
+                    onChange={(e) => setCustomFoodWeight(e.target.value)}
+                    min="1"
+                  />
+                </div>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label">Калорії порції (ккал):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="350"
+                    value={customFoodCalories}
+                    onChange={(e) => setCustomFoodCalories(e.target.value)}
+                    min="0"
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label" style={{ color: 'var(--color-protein)', fontSize: '11px' }}>Білки порції (г):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="12"
+                    value={customFoodProtein}
+                    onChange={(e) => setCustomFoodProtein(e.target.value)}
+                    style={{ borderColor: 'rgba(239, 68, 68, 0.2)' }}
+                    step="0.1"
+                    min="0"
+                  />
+                </div>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label" style={{ color: 'var(--color-fat)', fontSize: '11px' }}>Жири порції (г):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="2.5"
+                    value={customFoodFat}
+                    onChange={(e) => setCustomFoodFat(e.target.value)}
+                    style={{ borderColor: 'rgba(16, 185, 129, 0.2)' }}
+                    step="0.1"
+                    min="0"
+                  />
+                </div>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label" style={{ color: 'var(--color-carbs)', fontSize: '11px' }}>Вугл. порції (г):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="68"
+                    value={customFoodCarbs}
+                    onChange={(e) => setCustomFoodCarbs(e.target.value)}
+                    style={{ borderColor: 'rgba(245, 158, 11, 0.2)' }}
+                    step="0.1"
+                    min="0"
+                  />
+                </div>
+              </div>
+
+              <div style={{ fontSize: '11px', color: 'var(--text-dark-muted)', background: 'rgba(255, 255, 255, 0.03)', padding: '12px', borderRadius: '12px', marginTop: '4px', textAlign: 'left', lineHeight: '1.4', border: '1px solid rgba(255,255,255,0.03)' }}>
+                💡 <strong>Підказка:</strong> Введіть вагу та КБЖВ для будь-якої порції. Додаток автоматично приведе продукт до 100 г, щоб ви могли пізніше легко додавати будь-яку кількість грам.
+              </div>
+            </div>
+
+            <div className="modal-footer" style={{ marginTop: '20px' }}>
+              <button 
+                className="btn-secondary" 
+                onClick={() => setIsCustomFoodModalOpen(false)}
+                style={{ padding: '10px 16px' }}
+              >
+                Скасувати
+              </button>
+              <button 
+                className="btn-primary" 
+                onClick={handleSaveCustomFood}
+                style={{ padding: '10px 20px' }}
+              >
+                <Check size={18} />
+                Зберегти
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальне вікно для створення продукту зі штрих-кодом (який не знайдено) */}
+      {isBarcodeNotFoundModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsBarcodeNotFoundModalOpen(false)}>
+          <div className="modal-content glassmorphic-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h3>➕ Новий штрих-код</h3>
+                <span style={{ fontSize: '11px', opacity: 0.7, color: 'var(--color-water)' }}>Код: {barcodeNotFound}</span>
+              </div>
+              <button className="modal-close-btn" onClick={() => setIsBarcodeNotFoundModalOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="settings-group" style={{ textAlign: 'left' }}>
+                <label className="modal-label">Назва продукту:</label>
+                <input 
+                  type="text"
+                  className="modal-input"
+                  placeholder="Введіть назву продукту"
+                  value={fallbackName}
+                  onChange={(e) => setFallbackName(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label">Вага порції (г):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="100"
+                    value={fallbackWeight}
+                    onChange={(e) => setFallbackWeight(e.target.value)}
+                    min="1"
+                  />
+                </div>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label">Калорії порції (ккал):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="350"
+                    value={fallbackCalories}
+                    onChange={(e) => setFallbackCalories(e.target.value)}
+                    min="0"
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label" style={{ color: 'var(--color-protein)', fontSize: '11px' }}>Білки порції (г):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="12"
+                    value={fallbackProtein}
+                    onChange={(e) => setFallbackProtein(e.target.value)}
+                    style={{ borderColor: 'rgba(239, 68, 68, 0.2)' }}
+                    step="0.1"
+                    min="0"
+                  />
+                </div>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label" style={{ color: 'var(--color-fat)', fontSize: '11px' }}>Жири порції (г):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="2.5"
+                    value={fallbackFat}
+                    onChange={(e) => setFallbackFat(e.target.value)}
+                    style={{ borderColor: 'rgba(16, 185, 129, 0.2)' }}
+                    step="0.1"
+                    min="0"
+                  />
+                </div>
+                <div className="settings-group" style={{ textAlign: 'left' }}>
+                  <label className="modal-label" style={{ color: 'var(--color-carbs)', fontSize: '11px' }}>Вугл. порції (г):</label>
+                  <input 
+                    type="number"
+                    className="modal-input"
+                    placeholder="68"
+                    value={fallbackCarbs}
+                    onChange={(e) => setFallbackCarbs(e.target.value)}
+                    style={{ borderColor: 'rgba(245, 158, 11, 0.2)' }}
+                    step="0.1"
+                    min="0"
+                  />
+                </div>
+              </div>
+
+              <div style={{ fontSize: '11px', color: 'var(--text-dark-muted)', background: 'rgba(255, 255, 255, 0.03)', padding: '12px', borderRadius: '12px', marginTop: '4px', textAlign: 'left', lineHeight: '1.4', border: '1px solid rgba(255,255,255,0.03)' }}>
+                💡 <strong>Підказка:</strong> Після збереження цей продукт буде прив'язано до штрих-коду {barcodeNotFound}. При наступному скануванні він визначиться автоматично!
+              </div>
+            </div>
+
+            <div className="modal-footer" style={{ marginTop: '20px' }}>
+              <button 
+                className="btn-secondary" 
+                onClick={() => setIsBarcodeNotFoundModalOpen(false)}
+                style={{ padding: '10px 16px' }}
+              >
+                Скасувати
+              </button>
+              <button 
+                className="btn-primary" 
+                onClick={handleSaveCustomBarcode}
+                style={{ padding: '10px 20px' }}
+              >
+                <Check size={18} />
+                Зберегти
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast Notification Container */}
       {toast && (
         <div className={`toast-notification toast-${toast.type}`}>
