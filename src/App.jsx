@@ -552,9 +552,9 @@ export default function App() {
     return () => stopCamera();
   }, [activeTab, scannerMode]);
 
-  // Дебоунс-пошук продуктів в Open Food Facts API та автоматичний AI-пошук
+  // Дебоунс-пошук продуктів в українській базі Open Food Facts та автоматичний AI-пошук
   useEffect(() => {
-    if (activeTab !== 'scanner' || scannerMode !== 'search' || !searchQuery || searchQuery.trim().length < 2) {
+    if (activeTab !== 'scanner' || scannerMode !== 'search' || !searchQuery || searchQuery.trim().length < 3) {
       setExternalSearchFoods([]);
       setAiSearchFoods([]);
       setIsSearchingExternal(false);
@@ -562,10 +562,12 @@ export default function App() {
       return;
     }
 
+    let cancelled = false;
     setIsSearchingExternal(true);
     const delayTimer = setTimeout(async () => {
       try {
         const results = await searchProductsByName(searchQuery);
+        if (cancelled) return;
         setExternalSearchFoods(results);
 
         // Перевіряємо, чи містить запит ключові слова українських супермаркетів
@@ -590,11 +592,16 @@ export default function App() {
       } catch (err) {
         console.error("Error in live search query:", err);
       } finally {
-        setIsSearchingExternal(false);
+        if (!cancelled) {
+          setIsSearchingExternal(false);
+        }
       }
-    }, 600); // 600ms debounce
+    }, 900); // 900ms debounce
 
-    return () => clearTimeout(delayTimer);
+    return () => {
+      cancelled = true;
+      clearTimeout(delayTimer);
+    };
   }, [searchQuery, activeTab, scannerMode, apiKey]);
 
   // --- Camera Operations ---
@@ -2905,7 +2912,7 @@ export default function App() {
                   <input
                     type="text"
                     className="search-input-field"
-                    placeholder="Пошук страв та продуктів (напр. Хліб, Борщ...)"
+                    placeholder="Пошук продуктів і супермаркетів (напр. Молоко АТБ, Йогурт Сільпо...)"
                     value={searchQuery}
                     onChange={(e) => {
                       setSearchQuery(e.target.value);
@@ -3042,7 +3049,7 @@ export default function App() {
                   {isSearchingExternal && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', fontSize: '13px', color: 'var(--color-accent)' }}>
                       <RefreshCw className="spin" size={14} />
-                      <span>Шукаємо в базі Open Food Facts...</span>
+                      <span>Шукаємо в українській базі продуктів...</span>
                     </div>
                   )}
 
@@ -3167,7 +3174,7 @@ export default function App() {
                               {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
                             </span>
                           </div>
-                          <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>База OFF</span>
+                          <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>{food.sourceLabel || "База OFF"}</span>
                         </div>
                       ))}
                     </>
