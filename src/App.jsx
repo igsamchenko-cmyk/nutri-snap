@@ -2970,7 +2970,42 @@ export default function App() {
                   })()}
                 </div>
 
-
+                {/* AI Smart Search Button */}
+                {searchQuery.trim().length >= 2 && (
+                  <div style={{ padding: '0 16px 12px' }}>
+                    <button
+                      className="btn-primary"
+                      onClick={() => triggerAISmartSearch(searchQuery)}
+                      disabled={isSearchingAI}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        borderRadius: '14px',
+                        background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%)',
+                        border: 'none',
+                        color: 'white',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        boxShadow: '0 4px 12px rgba(139, 92, 246, 0.2)'
+                      }}
+                    >
+                      {isSearchingAI ? (
+                        <>
+                          <RefreshCw className="spin" size={16} />
+                          <span>ШІ генерує найкращі варіанти...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={16} />
+                          <span>🔮 Знайти сорти та варіанти через ШІ</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
 
                 {/* Filter Chips */}
                 <div className="filter-chips-container">
@@ -2997,13 +3032,13 @@ export default function App() {
                   {isSearchingAI && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', fontSize: '13px', color: '#a855f7' }}>
                       <RefreshCw className="spin" size={14} />
-                      <span>Шукаємо ШІ-продукти в АТБ, Сільпо, Рукавичка, Близенько...</span>
+                      <span>ШІ генерує найкращі варіанти...</span>
                     </div>
                   )}
 
                   {filteredSearchFoods.length === 0 && filteredExternalSearchFoods.length === 0 && filteredAiSearchFoods.length === 0 && !isSearchingExternal && !isSearchingAI ? (
                     <div style={{ textAlign: 'center', color: '#94a3b8', padding: '40px 20px', fontSize: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                      <span>Нічого не знайдено за запитом. Спробуйте змінити фільтр або запустити пошук ШІ по супермаркетах.</span>
+                      <span>Нічого не знайдено в базі. Натисніть кнопку ШІ-пошуку вище, щоб знайти цей продукт!</span>
                       <button
                         className="btn-primary"
                         style={{ marginTop: '8px', padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: 'auto' }}
