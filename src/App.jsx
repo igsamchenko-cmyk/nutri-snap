@@ -32,6 +32,8 @@ import { SERVER_GEMINI_API_KEY, analyzeFoodImage, detectBarcodeFromImage, estima
 import { mockFoods } from './data/mockFood';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
+const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
+
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -155,9 +157,9 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     try {
       const stored = localStorage.getItem('nutrisnap_apikey');
-      return stored ? stored.trim() : SERVER_GEMINI_API_KEY;
+      return stored ? stored.trim() : DEFAULT_API_KEY;
     } catch {
-      return SERVER_GEMINI_API_KEY;
+      return DEFAULT_API_KEY;
     }
   });
   const [scanMode, setScanMode] = useState('gemini');
@@ -1699,7 +1701,7 @@ export default function App() {
         }
         if (importedData.apiKey !== undefined) {
           const importedApiKey = String(importedData.apiKey || '').trim();
-          setApiKey(importedApiKey || SERVER_GEMINI_API_KEY);
+          setApiKey(importedApiKey || DEFAULT_API_KEY);
         }
         if (importedData.scanMode !== undefined) {
           setScanMode(importedData.scanMode);
@@ -3955,7 +3957,7 @@ export default function App() {
                         className="settings-input"
                         placeholder="AIzaSy..."
                         value={apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey}
-                        onChange={(e) => setApiKey(e.target.value.trim() ? e.target.value : SERVER_GEMINI_API_KEY)}
+                        onChange={(e) => setApiKey(e.target.value.trim() ? e.target.value : DEFAULT_API_KEY)}
                       />
                       <span className="settings-info-text">
                         Ваш API-ключ зберігається локально на вашому пристрої у безпечному сховищі браузера та надсилається лише напряму до Google API.

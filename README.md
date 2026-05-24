@@ -28,6 +28,16 @@ Check lint rules:
 npm run lint
 ```
 
+## GitHub Pages
+
+The app is configured to deploy automatically to GitHub Pages from the `main` branch through GitHub Actions.
+
+After GitHub Pages is enabled for this repository, the app will be available at:
+
+```text
+https://igsamchenko-cmyk.github.io/nutri-snap/
+```
+
 ## Gemini API Key
 
 For local development, put your Gemini key in `.env.local`:
@@ -38,6 +48,6 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 The development server proxies Gemini requests through `/api/gemini`, so the key stays outside the React source code and is not committed. `.env.local` is ignored by git.
 
-Users can still enter their own key in the app settings if they do not use the local proxy.
+GitHub Pages is static hosting and cannot keep runtime secrets. On GitHub Pages, users should enter their own Gemini key in the app settings, or the project should use a separate backend/serverless proxy.
 
 Do not commit real API keys to this repository.

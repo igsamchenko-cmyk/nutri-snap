@@ -12,7 +12,10 @@ createRoot(document.getElementById('root')).render(
 // Реєстрація Service Worker для PWA
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
+    const serviceWorkerUrl = `${import.meta.env.BASE_URL}sw.js`;
+    const serviceWorkerScope = import.meta.env.BASE_URL;
+
+    navigator.serviceWorker.register(serviceWorkerUrl, { scope: serviceWorkerScope })
       .then((reg) => {
         console.log('PWA Service Worker зареєстровано:', reg.scope);
       })
