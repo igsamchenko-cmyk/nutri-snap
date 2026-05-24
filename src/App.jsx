@@ -4036,7 +4036,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.1.0 (Оновлено: Safe Area + Top Toasts)</p>
+              <p>NutriSnap v1.2.0 (Smart AI Search + Varieties)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
