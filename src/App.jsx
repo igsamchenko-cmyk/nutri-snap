@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { SERVER_GEMINI_API_KEY, analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSmartProducts } from './services/geminiService';
 import { mockFoods } from './data/mockFood';
+import { ukrainianProductSeeds } from './data/ukrainianProductSeeds';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
@@ -1421,6 +1422,7 @@ export default function App() {
 
   // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
   const combinedFoods = [
+    ...ukrainianProductSeeds,
     ...mockFoods,
     ...customFoods.map(f => ({ 
       ...f, 
@@ -1439,12 +1441,21 @@ export default function App() {
   ];
 
   const filteredSearchFoods = combinedFoods.filter(food => {
-    const matchesQuery = food.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()));
+    const normalizedQuery = searchQuery.toLowerCase().trim();
+    const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+    const foodSearchText = [
+      food.name,
+      food.brand,
+      food.supermarket,
+      food.category,
+      food.searchText
+    ].filter(Boolean).join(' ').toLowerCase();
+    const matchesQuery = queryTokens.length === 0 || queryTokens.every(token => foodSearchText.includes(token));
     if (!matchesQuery) return false;
 
     if (selectedCategoryFilter === 'Усі') return true;
     if (selectedCategoryFilter === 'Супермаркети') {
+      if (food.supermarket || food.source === 'ua-seed') return true;
       const isSupermarket = food.brand && (
         food.brand.includes('АТБ') || 
         food.brand.includes('Сільпо') || 
@@ -2933,10 +2944,17 @@ export default function App() {
                   {(() => {
                     if (searchQuery.length === 0 || !showSuggestions) return null;
                     
-                    const suggestions = combinedFoods.filter(food => 
-                      food.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()))
-                    ).slice(0, 6);
+                    const suggestionTokens = searchQuery.toLowerCase().trim().split(/\s+/).filter(Boolean);
+                    const suggestions = combinedFoods.filter(food => {
+                      const foodSearchText = [
+                        food.name,
+                        food.brand,
+                        food.supermarket,
+                        food.category,
+                        food.searchText
+                      ].filter(Boolean).join(' ').toLowerCase();
+                      return suggestionTokens.every(token => foodSearchText.includes(token));
+                    }).slice(0, 6);
 
                     if (suggestions.length === 0) return null;
 
