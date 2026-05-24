@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { SERVER_GEMINI_API_KEY, analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSmartProducts } from './services/geminiService';
 import { mockFoods } from './data/mockFood';
-import { ukrainianProductSeeds } from './data/ukrainianProductSeeds';
+import { productCatalog } from './data/products';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
@@ -1422,7 +1422,7 @@ export default function App() {
 
   // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
   const combinedFoods = [
-    ...ukrainianProductSeeds,
+    ...productCatalog,
     ...mockFoods,
     ...customFoods.map(f => ({ 
       ...f, 
