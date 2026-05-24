@@ -28,7 +28,9 @@ import {
   Search,
   X
 } from 'lucide-react';
-import { analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSmartProducts } from './services/geminiService';
+import { SERVER_GEMINI_API_KEY, analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSmartProducts } from './services/geminiService';
+import { mockFoods } from './data/mockFood';
+import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
@@ -42,6 +44,14 @@ const getTodayString = (dateObj = new Date()) => {
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
   const day = String(dateObj.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const createMealId = () => {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 };
 
 // Форматування дати для відображення в інтерфейсі (українською)
@@ -145,9 +155,9 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     try {
       const stored = localStorage.getItem('nutrisnap_apikey');
-      return stored ? stored.trim() : 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
-    } catch (e) {
-      return 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+      return stored ? stored.trim() : SERVER_GEMINI_API_KEY;
+    } catch {
+      return SERVER_GEMINI_API_KEY;
     }
   });
   const [scanMode, setScanMode] = useState('gemini');
@@ -476,7 +486,11 @@ export default function App() {
   }, [profile]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_apikey', apiKey.trim());
+    if (apiKey === SERVER_GEMINI_API_KEY) {
+      localStorage.removeItem('nutrisnap_apikey');
+    } else {
+      localStorage.setItem('nutrisnap_apikey', apiKey.trim());
+    }
   }, [apiKey]);
 
   useEffect(() => {
@@ -858,7 +872,7 @@ export default function App() {
     const finalCarbs = Number(scannedCarbs) || 0;
 
     const newMeal = {
-      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+      id: createMealId(),
       name: scanResult.name,
       calories: finalCalories,
       protein: finalProtein,
@@ -1287,7 +1301,7 @@ export default function App() {
     const finalCarbs = Number(barcodeScannedCarbs) || 0;
 
     const newMeal = {
-      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+      id: createMealId(),
       name: barcodeResult.name,
       calories: finalCalories,
       protein: finalProtein,
@@ -1337,7 +1351,7 @@ export default function App() {
     const finalCarbs = Math.round(Number(selectedSearchFood.carbs) * weightFactor * 10) / 10;
 
     const newMeal = {
-      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+      id: createMealId(),
       name: selectedSearchFood.name,
       calories: finalCalories,
       protein: finalProtein,
@@ -1376,7 +1390,7 @@ export default function App() {
     try {
       const results = await searchSmartProducts(cleanQuery, apiKey, geminiModel);
       const formattedResults = (results || []).map(p => ({
-        id: p.id || 'ai-market-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+        id: p.id || `ai-market-${createMealId()}`,
         name: p.name,
         brand: p.brand || p.supermarket || "ШІ Пошук",
         supermarket: p.supermarket || "Загальний",
@@ -1630,7 +1644,7 @@ export default function App() {
         meals,
         waterIntake,
         profile,
-        apiKey,
+        apiKey: apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey,
         scanMode,
         geminiModel,
         theme
@@ -1684,7 +1698,8 @@ export default function App() {
           setProfile(prev => ({ ...prev, ...importedData.profile }));
         }
         if (importedData.apiKey !== undefined) {
-          setApiKey(importedData.apiKey);
+          const importedApiKey = String(importedData.apiKey || '').trim();
+          setApiKey(importedApiKey || SERVER_GEMINI_API_KEY);
         }
         if (importedData.scanMode !== undefined) {
           setScanMode(importedData.scanMode);
@@ -2012,7 +2027,7 @@ export default function App() {
                             const category = getDefaultCategory();
                             const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
                             const newMeal = {
-                              id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+                              id: createMealId(),
                               name: fav.name,
                               calories: Number(fav.calories) || 0,
                               protein: Number(fav.protein) || 0,
@@ -3939,8 +3954,8 @@ export default function App() {
                         type="password"
                         className="settings-input"
                         placeholder="AIzaSy..."
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
+                        value={apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey}
+                        onChange={(e) => setApiKey(e.target.value.trim() ? e.target.value : SERVER_GEMINI_API_KEY)}
                       />
                       <span className="settings-info-text">
                         Ваш API-ключ зберігається локально на вашому пристрої у безпечному сховищі браузера та надсилається лише напряму до Google API.

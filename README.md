@@ -1,16 +1,43 @@
-# React + Vite
+# NutriSnap
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+NutriSnap is a mobile-first React/Vite app for tracking meals, water intake, calories, and macros. It supports food photo analysis through Gemini, barcode lookup through Open Food Facts, a local food database, custom foods, favorites, PWA install support, and local backup/restore.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Install dependencies:
 
-## React Compiler
+```bash
+npm ci
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Run the development server:
 
-## Expanding the ESLint configuration
+```bash
+npm run dev
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Build for production:
+
+```bash
+npm run build
+```
+
+Check lint rules:
+
+```bash
+npm run lint
+```
+
+## Gemini API Key
+
+For local development, put your Gemini key in `.env.local`:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+The development server proxies Gemini requests through `/api/gemini`, so the key stays outside the React source code and is not committed. `.env.local` is ignored by git.
+
+Users can still enter their own key in the app settings if they do not use the local proxy.
+
+Do not commit real API keys to this repository.

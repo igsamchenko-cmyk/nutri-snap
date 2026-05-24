@@ -3,6 +3,30 @@
  */
 
 // Допоміжна функція для обробки помилок Gemini API
+export const SERVER_GEMINI_API_KEY = '__nutrisnap_server_gemini_key__';
+
+async function requestGeminiContent(modelName, payload, apiKey) {
+  const useServerKey = apiKey === SERVER_GEMINI_API_KEY;
+  const url = useServerKey
+    ? `/api/gemini/${encodeURIComponent(modelName)}`
+    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey.trim()}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw handleGeminiError(response, errorData);
+  }
+
+  return response.json();
+}
+
 function handleGeminiError(response, errorData) {
   const apiErrorMessage = errorData.error?.message || "";
   console.error("Gemini API Error details:", errorData);
@@ -23,14 +47,12 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
 
-  const trimmedKey = apiKey.trim();
 
 
   // Очищення base64 префіксу (наприклад, data:image/jpeg;base64,) якщо він є
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
 
   // Використовуємо обрану модель Gemini
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
 
   const promptText = `
     Проаналізуй це фото їжі. Визнач головну страву або продукт харчування на знімку.
@@ -70,20 +92,7 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
   };
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw handleGeminiError(response, errorData);
-    }
-
-    const data = await response.json();
+    const data = await requestGeminiContent(modelName, payload, apiKey);
     
     // Перевірка наявності відповіді
     const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -112,11 +121,7 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
 
-  const trimmedKey = apiKey.trim();
-
-
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
 
   const promptText = `
     Проаналізуй це зображення штрих-коду продукту.
@@ -147,20 +152,7 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
   };
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw handleGeminiError(response, errorData);
-    }
-
-    const data = await response.json();
+    const data = await requestGeminiContent(modelName, payload, apiKey);
     const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResponse) {
       throw new Error("ШІ не зміг прочитати штрих-код з цього фото.");
@@ -178,9 +170,6 @@ export async function estimateFoodNutritionByName(foodName, apiKey, modelName = 
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
-  const trimmedKey = apiKey.trim();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
-
   const promptText = `
     Проаналізуй назву страви або продукту харчування: "${foodName}".
     Оціни її типову харчову цінність на 100 грамів:
@@ -214,20 +203,7 @@ export async function estimateFoodNutritionByName(foodName, apiKey, modelName = 
   };
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw handleGeminiError(response, errorData);
-    }
-
-    const data = await response.json();
+    const data = await requestGeminiContent(modelName, payload, apiKey);
     const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResponse) {
       throw new Error("ШІ не зміг згенерувати відповідь для цієї назви страви.");
@@ -248,9 +224,7 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
-  const trimmedKey = apiKey.trim();
   const base64ImageBytes = base64Data.replace(/^data:image\/\w+;base64,/, "");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
 
   const promptText = `
     Проаналізуй це зображення упаковки продукту харчування (зокрема таблицю харчової цінності або опис КБЖВ).
@@ -292,20 +266,7 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
   };
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw handleGeminiError(response, errorData);
-    }
-
-    const data = await response.json();
+    const data = await requestGeminiContent(modelName, payload, apiKey);
     const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResponse) {
       throw new Error("ШІ не зміг згенерувати відповідь для цього зображення.");
@@ -326,9 +287,6 @@ export async function searchSmartProducts(query, apiKey, modelName = 'gemini-2.5
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
-  const trimmedKey = apiKey.trim();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${trimmedKey}`;
-
   const promptText = `
     Ти — інтелектуальний пошуковий помічник по продуктах харчування та стравах.
     Знайди або згенеруй найбільш релевантні результати для пошукового запиту: "${query}".
@@ -378,20 +336,7 @@ export async function searchSmartProducts(query, apiKey, modelName = 'gemini-2.5
   };
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw handleGeminiError(response, errorData);
-    }
-
-    const data = await response.json();
+    const data = await requestGeminiContent(modelName, payload, apiKey);
     const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResponse) {
       throw new Error("ШІ не зміг згенерувати відповідь для пошуку продуктів.");
