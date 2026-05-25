@@ -4150,9 +4150,11 @@ export default function App() {
           <button 
             className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
             onClick={() => setActiveTab('settings')}
+            aria-label="Налаштування"
+            title="Налаштування"
           >
             <Settings size={22} />
-            <span>Налаштування</span>
+            <span>Налашт.</span>
           </button>
         </nav>
       )}
