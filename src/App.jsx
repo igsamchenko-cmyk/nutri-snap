@@ -377,6 +377,7 @@ export default function App() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [barcodeLoading, setBarcodeLoading] = useState(false);
   const [barcodeResult, setBarcodeResult] = useState(null);
+  const [barcodeCandidateProduct, setBarcodeCandidateProduct] = useState(null);
   const [barcodeEditedWeight, setBarcodeEditedWeight] = useState(100);
   const [barcodeScannedProtein, setBarcodeScannedProtein] = useState(0);
   const [barcodeScannedFat, setBarcodeScannedFat] = useState(0);
@@ -570,6 +571,7 @@ export default function App() {
         // Очищуємо результати пошуку штрих-кодів, якщо виходимо зі сканера повністю
         setScanResult(null);
         setBarcodeResult(null);
+        setBarcodeCandidateProduct(null);
         setBarcodeError(null);
         setBarcodeInput('');
       }
@@ -915,6 +917,11 @@ export default function App() {
   const addScannedMealToDiary = () => {
     if (!scanResult) return;
 
+    if (scanResult.dataQuality !== "label_read") {
+      const confirmed = window.confirm("Це приблизна оцінка ШІ, а не точні дані з етикетки. Додати її до щоденника?");
+      if (!confirmed) return;
+    }
+
     const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
     const category = scannedMealCategory;
 
@@ -964,11 +971,36 @@ export default function App() {
     return await getProductByBarcode(cleanBarcode);
   };
 
-  const setVerifiedBarcodeProduct = (product) => {
+  const prepareManualBarcodeEntry = (barcodeVal, product = null, message = "") => {
+    const cleanBarcode = barcodeVal?.trim() || product?.barcode || "";
+    setBarcodeResult(null);
+    setBarcodeCandidateProduct(product);
+    setBarcodeNotFound(cleanBarcode);
+    setBarcodeError(message);
+    setFallbackName(product?.name || '');
+    setFallbackCalories('');
+    setFallbackProtein('');
+    setFallbackFat('');
+    setFallbackCarbs('');
+    setFallbackWeight(product?.weight ? String(product.weight) : '100');
+  };
+
+  const setVerifiedBarcodeProduct = (product, barcodeVal = "") => {
+    if (product?.source === "openfoodfacts") {
+      prepareManualBarcodeEntry(
+        barcodeVal,
+        product,
+        "Зовнішня база знайшла товар, але її КБЖВ не використовуються автоматично. Введіть значення з етикетки."
+      );
+      return false;
+    }
+
     if (!hasCompleteNutritionValues(product)) {
       throw new Error("У знайденого продукту немає повного набору КБЖВ. Щоб не показувати неправильні дані, внесіть значення з етикетки вручну.");
     }
 
+    setBarcodeCandidateProduct(null);
+    setBarcodeNotFound(null);
     setBarcodeResult(product);
     const w = product.weight || 100;
     setBarcodeEditedWeight(w);
@@ -977,6 +1009,7 @@ export default function App() {
     setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
     setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
     setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+    return true;
   };
 
   // Запуск аналізу штрих-коду ШІ
@@ -984,6 +1017,7 @@ export default function App() {
     setIsBarcodeScanning(true);
     setBarcodeError(null);
     setBarcodeResult(null);
+    setBarcodeCandidateProduct(null);
     setBarcodeNotFound(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     let detectedBarcode = null;
@@ -1002,18 +1036,12 @@ export default function App() {
       
       setBarcodeLoading(true);
       const product = await resolveBarcodeProduct(barcodeVal);
-      setVerifiedBarcodeProduct(product);
+      setVerifiedBarcodeProduct(product, barcodeVal);
     } catch (err) {
       console.error(err);
       setBarcodeError(err.message || "Помилка при зчитуванні штрих-коду.");
       if (detectedBarcode) {
-        setBarcodeNotFound(detectedBarcode);
-        setFallbackName('');
-        setFallbackCalories('');
-        setFallbackProtein('');
-        setFallbackFat('');
-        setFallbackCarbs('');
-        setFallbackWeight('100');
+        prepareManualBarcodeEntry(detectedBarcode, null, err.message || "Не вдалося знайти надійні дані для цього штрих-коду.");
       }
     } finally {
       setIsBarcodeScanning(false);
@@ -1049,28 +1077,24 @@ export default function App() {
     setBarcodeLoading(true);
     setBarcodeError(null);
     setBarcodeResult(null);
+    setBarcodeCandidateProduct(null);
     setBarcodeNotFound(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     
     try {
       const product = await resolveBarcodeProduct(barcodeVal);
-      setVerifiedBarcodeProduct(product);
+      const accepted = setVerifiedBarcodeProduct(product, barcodeVal);
       
       // Вібрація для зворотного зв'язку при успішному зчитуванні
-      if (navigator.vibrate) {
+      if (accepted && navigator.vibrate) {
         navigator.vibrate(150);
       }
-      showToast("Штрих-код успішно розпізнано!", "success");
+      if (accepted) {
+        showToast("Штрих-код успішно розпізнано!", "success");
+      }
     } catch (err) {
       console.error("Direct barcode search error:", err);
-      setBarcodeError(err.message || "Не вдалося знайти товар за цим штрих-кодом.");
-      setBarcodeNotFound(barcodeVal);
-      setFallbackName('');
-      setFallbackCalories('');
-      setFallbackProtein('');
-      setFallbackFat('');
-      setFallbackCarbs('');
-      setFallbackWeight('100');
+      prepareManualBarcodeEntry(barcodeVal, null, err.message || "Не вдалося знайти надійні дані для цього штрих-коду.");
     } finally {
       setBarcodeLoading(false);
     }
@@ -1168,6 +1192,7 @@ export default function App() {
     setFallbackWeight('100');
     setIsBarcodeNotFoundModalOpen(false);
     setBarcodeNotFound(null);
+    setBarcodeCandidateProduct(null);
 
     showToast(`Продукт успішно збережено для штрих-коду ${barcodeNotFound}!`, "success");
 
@@ -1270,21 +1295,16 @@ export default function App() {
     setBarcodeLoading(true);
     setBarcodeError(null);
     setBarcodeResult(null);
+    setBarcodeCandidateProduct(null);
+    setBarcodeNotFound(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     
     try {
       const product = await resolveBarcodeProduct(barcodeInput);
-      setVerifiedBarcodeProduct(product);
+      setVerifiedBarcodeProduct(product, barcodeInput);
     } catch (err) {
       console.error("Barcode lookup error:", err);
-      setBarcodeError(err.message || "Не вдалося знайти продукт.");
-      setBarcodeNotFound(barcodeInput.trim());
-      setFallbackName('');
-      setFallbackCalories('');
-      setFallbackProtein('');
-      setFallbackFat('');
-      setFallbackCarbs('');
-      setFallbackWeight('100');
+      prepareManualBarcodeEntry(barcodeInput.trim(), null, err.message || "Не вдалося знайти надійні дані для цього штрих-коду.");
     } finally {
       setBarcodeLoading(false);
     }
@@ -2961,6 +2981,7 @@ export default function App() {
                       <button 
                         onClick={() => {
                           setBarcodeNotFound(null);
+                          setBarcodeCandidateProduct(null);
                           setBarcodeInput('');
                           setBarcodeError(null);
                         }}
@@ -2986,35 +3007,50 @@ export default function App() {
                       </button>
                       <div className="results-header" style={{ marginBottom: '8px' }}>
                         <div className="barcode-product-info" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                          <div className="barcode-product-image" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', width: '56px', height: '56px', borderRadius: '12px' }}>
-                            <AlertCircle size={28} />
-                          </div>
+                          {barcodeCandidateProduct?.image ? (
+                            <img src={barcodeCandidateProduct.image} alt={barcodeCandidateProduct.name} className="barcode-product-image" style={{ width: '56px', height: '56px', borderRadius: '12px', objectFit: 'cover' }} />
+                          ) : (
+                            <div className="barcode-product-image" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', width: '56px', height: '56px', borderRadius: '12px' }}>
+                              <AlertCircle size={28} />
+                            </div>
+                          )}
                           <div style={{ textAlign: 'left' }}>
-                            <span className="match-badge" style={{ background: '#ef4444', color: '#fff' }}>Невідомий штрих-код</span>
-                            <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px', color: '#f1f5f9' }}>{barcodeNotFound}</h2>
+                            <span className="match-badge" style={{ background: '#ef4444', color: '#fff' }}>
+                              {barcodeCandidateProduct ? "Потрібне підтвердження" : "Невідомий штрих-код"}
+                            </span>
+                            <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px', color: '#f1f5f9' }}>
+                              {barcodeCandidateProduct?.name || barcodeNotFound}
+                            </h2>
+                            {barcodeCandidateProduct && (
+                              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
+                                Код: {barcodeNotFound} • Джерело: {barcodeCandidateProduct.sourceLabel || "зовнішня база"}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
                       
                       <p style={{ fontSize: '13px', color: 'var(--text-dark-muted)', marginBottom: '16px', lineHeight: '1.4', textAlign: 'left' }}>
-                        Цього продукту ще немає в нашій базі даних. Ви можете легко внести його назву та КБЖВ на 100 г, щоб додаток автоматично розраховував калорійність та зберігав продукт для майбутнього використання.
+                        {barcodeCandidateProduct
+                          ? "Товар знайдено у зовнішній базі, але КБЖВ звідти можуть бути неправильними. Щоб не обманювати користувача, додаток не підставляє ці числа автоматично. Внесіть значення з етикетки, і цей штрих-код буде збережено як перевірений."
+                          : "Цього продукту ще немає в нашій перевіреній базі даних. Ви можете внести назву та КБЖВ з етикетки на 100 г, щоб додаток надалі автоматично розраховував калорійність."}
                       </p>
 
                       <button 
                         className="btn-primary" 
                         style={{ width: '100%' }} 
                         onClick={() => {
-                          setFallbackName('');
+                          setFallbackName(barcodeCandidateProduct?.name || '');
                           setFallbackCalories('');
                           setFallbackProtein('');
                           setFallbackFat('');
                           setFallbackCarbs('');
-                          setFallbackWeight('100');
+                          setFallbackWeight(barcodeCandidateProduct?.weight ? String(barcodeCandidateProduct.weight) : '100');
                           setIsBarcodeNotFoundModalOpen(true);
                         }}
                       >
                         <Plus size={18} />
-                        Додати продукт в базу
+                        Ввести КБЖВ з етикетки
                       </button>
                     </div>
                   )}
@@ -3265,8 +3301,13 @@ export default function App() {
                             className="search-food-item"
                             style={{ borderLeft: `4px solid ${borderCol}` }}
                             onClick={() => {
-                              setSelectedSearchFood(food);
-                              setSearchFoodWeight(food.weight);
+                              setCustomFoodName(food.name);
+                              setCustomFoodCalories('');
+                              setCustomFoodProtein('');
+                              setCustomFoodFat('');
+                              setCustomFoodCarbs('');
+                              setCustomFoodWeight(food.weight || '100');
+                              setIsCustomFoodModalOpen(true);
                             }}
                           >
                             <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🔮'}</span>
@@ -3275,7 +3316,7 @@ export default function App() {
                                 {food.name}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                                {food.brand ? `${food.brand} • ` : ''}ШІ-підказка назви, КБЖВ внесіть вручну
                               </span>
                             </div>
                             <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket || "ШІ"}</span>
@@ -3290,8 +3331,13 @@ export default function App() {
                           className="search-food-item"
                           style={{ borderLeft: '3px solid var(--color-water)' }}
                           onClick={() => {
-                            setSelectedSearchFood(food);
-                            setSearchFoodWeight(food.weight);
+                            setCustomFoodName(food.name);
+                            setCustomFoodCalories('');
+                            setCustomFoodProtein('');
+                            setCustomFoodFat('');
+                            setCustomFoodCarbs('');
+                            setCustomFoodWeight(food.weight || '100');
+                            setIsCustomFoodModalOpen(true);
                           }}
                         >
                           <span style={{ fontSize: '24px', marginRight: '8px' }}>🛒</span>
@@ -3300,7 +3346,7 @@ export default function App() {
                               {food.name}
                             </span>
                             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                              {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                              {food.brand ? `${food.brand} • ` : ''}Зовнішня база: КБЖВ підтвердіть з етикетки
                             </span>
                           </div>
                           <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>{food.sourceLabel || "База OFF"}</span>
