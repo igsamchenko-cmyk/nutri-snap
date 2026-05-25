@@ -58,6 +58,10 @@ const hasCompleteNutritionValues = (item) => (
   ["calories", "protein", "fat", "carbs"].every(field => Number.isFinite(Number(item?.[field])))
 );
 
+const hasFilledNutritionInputs = (...values) => (
+  values.every(value => String(value ?? '').trim() !== '' && Number.isFinite(Number(value)))
+);
+
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -1106,6 +1110,10 @@ export default function App() {
       showToast("Будь ласка, введіть назву продукту", "error");
       return;
     }
+    if (!hasFilledNutritionInputs(customFoodCalories, customFoodProtein, customFoodFat, customFoodCarbs, customFoodWeight)) {
+      showToast("Введіть вагу та всі КБЖВ з етикетки, щоб зберегти продукт у базу.", "error");
+      return;
+    }
 
     const kcalVal = Number(customFoodCalories) || 0;
     const proteinVal = Number(customFoodProtein) || 0;
@@ -1123,11 +1131,13 @@ export default function App() {
       fat: Math.round(fatVal * scaleTo100 * 10) / 10,
       carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
       weight: 100, // Базові нутрієнти зберігаємо на 100г
-      brand: "Мій продукт",
+      brand: "Моя база",
       icon: "🏷️",
       source: "manual",
-      sourceLabel: "Введено вручну",
-      dataQuality: "manual"
+      sourceLabel: "Моя база",
+      dataQuality: "manual",
+      searchText: `${customFoodName.trim()} моя база введено вручну`.toLowerCase(),
+      createdAt: new Date().toISOString()
     };
 
     setCustomFoods(prev => [newFood, ...prev]);
@@ -1141,7 +1151,7 @@ export default function App() {
     setCustomFoodWeight('100');
     setIsCustomFoodModalOpen(false);
 
-    showToast(`Продукт "${newFood.name}" створено та збережено!`, "success");
+    showToast(`"${newFood.name}" збережено у вашу базу продуктів!`, "success");
 
     // Відразу відкриваємо діалог додавання до щоденника
     setSelectedSearchFood(newFood);
@@ -1156,6 +1166,10 @@ export default function App() {
       return;
     }
     if (!barcodeNotFound) return;
+    if (!hasFilledNutritionInputs(fallbackCalories, fallbackProtein, fallbackFat, fallbackCarbs, fallbackWeight)) {
+      showToast("Введіть вагу та всі КБЖВ з етикетки, щоб зберегти продукт для штрих-коду.", "error");
+      return;
+    }
 
     const kcalVal = Number(fallbackCalories) || 0;
     const proteinVal = Number(fallbackProtein) || 0;
@@ -1172,11 +1186,13 @@ export default function App() {
       fat: Math.round(fatVal * scaleTo100 * 10) / 10,
       carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
       weight: 100, // Базові нутрієнти зберігаємо на 100г
-      brand: "Мій продукт",
+      brand: "Моя база",
       icon: "🏷️",
       source: "manual",
-      sourceLabel: "Введено вручну",
-      dataQuality: "manual"
+      sourceLabel: "Моя база",
+      dataQuality: "manual",
+      searchText: `${fallbackName.trim()} ${barcodeNotFound} моя база штрих код введено вручну`.toLowerCase(),
+      createdAt: new Date().toISOString()
     };
 
     setCustomBarcodes(prev => ({
@@ -1194,7 +1210,7 @@ export default function App() {
     setBarcodeNotFound(null);
     setBarcodeCandidateProduct(null);
 
-    showToast(`Продукт успішно збережено для штрих-коду ${barcodeNotFound}!`, "success");
+    showToast(`"${newProduct.name}" збережено у вашу базу та прив'язано до штрих-коду!`, "success");
 
     // Відразу відкриваємо результат штрих-коду
     setBarcodeResult(newProduct);
@@ -4330,7 +4346,7 @@ export default function App() {
         <div className="modal-backdrop" onClick={() => setIsCustomFoodModalOpen(false)}>
           <div className="modal-content glassmorphic-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>➕ Створення продукту вручну</h3>
+              <h3>➕ Додати продукт у мою базу</h3>
               <button className="modal-close-btn" onClick={() => setIsCustomFoodModalOpen(false)}>
                 <X size={16} />
               </button>
@@ -4416,7 +4432,7 @@ export default function App() {
               </div>
 
               <div style={{ fontSize: '11px', color: 'var(--text-dark-muted)', background: 'rgba(255, 255, 255, 0.03)', padding: '12px', borderRadius: '12px', marginTop: '4px', textAlign: 'left', lineHeight: '1.4', border: '1px solid rgba(255,255,255,0.03)' }}>
-                💡 <strong>Підказка:</strong> Введіть вагу та КБЖВ для будь-якої порції. Додаток автоматично приведе продукт до 100 г, щоб ви могли пізніше легко додавати будь-яку кількість грам.
+                💡 <strong>Підказка:</strong> Введіть вагу та КБЖВ з етикетки для будь-якої порції. Додаток автоматично приведе продукт до 100 г і збереже його у вашій базі для наступних пошуків.
               </div>
             </div>
 
@@ -4434,7 +4450,7 @@ export default function App() {
                 style={{ padding: '10px 20px' }}
               >
                 <Check size={18} />
-                Зберегти
+                Зберегти в базу
               </button>
             </div>
           </div>
@@ -4447,7 +4463,7 @@ export default function App() {
           <div className="modal-content glassmorphic-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h3>➕ Новий штрих-код</h3>
+                <h3>➕ Зберегти продукт у базу</h3>
                 <span style={{ fontSize: '11px', opacity: 0.7, color: 'var(--color-water)' }}>Код: {barcodeNotFound}</span>
               </div>
               <button className="modal-close-btn" onClick={() => setIsBarcodeNotFoundModalOpen(false)}>
@@ -4535,7 +4551,7 @@ export default function App() {
               </div>
 
               <div style={{ fontSize: '11px', color: 'var(--text-dark-muted)', background: 'rgba(255, 255, 255, 0.03)', padding: '12px', borderRadius: '12px', marginTop: '4px', textAlign: 'left', lineHeight: '1.4', border: '1px solid rgba(255,255,255,0.03)' }}>
-                💡 <strong>Підказка:</strong> Після збереження цей продукт буде прив'язано до штрих-коду {barcodeNotFound}. При наступному скануванні він визначиться автоматично!
+                💡 <strong>Підказка:</strong> Введіть назву та КБЖВ з етикетки. Після збереження продукт буде у вашій базі та прив'яжеться до штрих-коду {barcodeNotFound}.
               </div>
             </div>
 
@@ -4553,7 +4569,7 @@ export default function App() {
                 style={{ padding: '10px 20px' }}
               >
                 <Check size={18} />
-                Зберегти
+                Зберегти в базу
               </button>
             </div>
           </div>
