@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -34,6 +34,25 @@ import { productCatalog } from './data/products';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
+const MAX_LOCAL_SEARCH_RESULTS = 80;
+const MAX_SEARCH_SUGGESTIONS = 6;
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+
+const normalizeSearchText = (value = '') =>
+  String(value)
+    .toLowerCase()
+    .replace(/[ʼ'`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getFoodSearchText = (food) =>
+  normalizeSearchText([
+    food.name,
+    food.brand,
+    food.supermarket,
+    food.category,
+    food.searchText
+  ].filter(Boolean).join(' '));
 
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
@@ -109,10 +128,13 @@ export default function App() {
   const [aiSearchFoods, setAiSearchFoods] = useState([]);
   const [isSearchingExternal, setIsSearchingExternal] = useState(false);
   const [isSearchingAI, setIsSearchingAI] = useState(false);
-  const [lastAISearchQuery, setLastAISearchQuery] = useState('');
   const [isAIEstimating, setIsAIEstimating] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isNativeScannerSupported] = useState(() => 'BarcodeDetector' in window);
+  const externalSearchCacheRef = useRef(new Map());
+  const aiSearchCacheRef = useRef(new Map());
+  const aiSearchRequestIdRef = useRef(0);
+  const aiSearchInFlightKeyRef = useRef('');
   
   // Дані страв та води (ініціалізація з localStorage)
   const [meals, setMeals] = useState(() => {
@@ -555,7 +577,11 @@ export default function App() {
 
   // Дебоунс-пошук продуктів в українській базі Open Food Facts та автоматичний AI-пошук
   useEffect(() => {
-    if (activeTab !== 'scanner' || scannerMode !== 'search' || !searchQuery || searchQuery.trim().length < 3) {
+    const cleanQuery = searchQuery.trim();
+
+    if (activeTab !== 'scanner' || scannerMode !== 'search' || cleanQuery.length < 3) {
+      aiSearchRequestIdRef.current += 1;
+      aiSearchInFlightKeyRef.current = '';
       setExternalSearchFoods([]);
       setAiSearchFoods([]);
       setIsSearchingExternal(false);
@@ -564,32 +590,36 @@ export default function App() {
     }
 
     let cancelled = false;
-    setIsSearchingExternal(true);
+    const cacheKey = normalizeSearchText(cleanQuery);
+    const cachedExternal = externalSearchCacheRef.current.get(cacheKey);
+
+    if (cachedExternal && Date.now() - cachedExternal.cachedAt < SEARCH_CACHE_TTL_MS) {
+      setExternalSearchFoods(cachedExternal.results);
+      setIsSearchingExternal(false);
+    } else {
+      setIsSearchingExternal(true);
+    }
+
     const delayTimer = setTimeout(async () => {
       try {
-        const results = await searchProductsByName(searchQuery);
-        if (cancelled) return;
-        setExternalSearchFoods(results);
-
-        // Перевіряємо, чи містить запит ключові слова українських супермаркетів
-        const queryLower = searchQuery.toLowerCase();
-        const hasSupermarketKeyword = [
-          'атб', 'atb', 
-          'сільпо', 'сильпо', 'silpo', 
-          'рукавичка', 'rukavychka', 
-          'близенько', 'blyzenko',
-          'своя лінія', 'своя линия',
-          'розумний вибір', 'умний вибір', 'розумний вибир',
-          'премія', 'премия',
-          'повна чаша',
-          'кухарочка'
-        ].some(keyword => queryLower.includes(keyword));
-
         // Якщо є введений API-ключ Gemini, завжди запускаємо розумний пошук ШІ паралельно з OFF,
         // щоб одразу отримувати сорти та варіації (яблуко Голден, Гала тощо)
         if (apiKey && apiKey.trim() !== '') {
-          triggerAISmartSearch(searchQuery);
+          triggerAISmartSearch(cleanQuery);
         }
+
+        if (cachedExternal && Date.now() - cachedExternal.cachedAt < SEARCH_CACHE_TTL_MS) {
+          return;
+        }
+
+        const results = await searchProductsByName(cleanQuery);
+        externalSearchCacheRef.current.set(cacheKey, {
+          cachedAt: Date.now(),
+          results
+        });
+
+        if (cancelled) return;
+        setExternalSearchFoods(results);
       } catch (err) {
         console.error("Error in live search query:", err);
       } finally {
@@ -1393,10 +1423,21 @@ export default function App() {
     if (!apiKey || apiKey.trim() === '') return;
     
     const cleanQuery = queryToSearch.trim();
-    if (cleanQuery.toLowerCase() === lastAISearchQuery.toLowerCase()) return;
-    
-    setLastAISearchQuery(cleanQuery);
+    const cacheKey = `${geminiModel}:${normalizeSearchText(cleanQuery)}`;
+    const cachedAiResults = aiSearchCacheRef.current.get(cacheKey);
+
+    if (cachedAiResults && Date.now() - cachedAiResults.cachedAt < SEARCH_CACHE_TTL_MS) {
+      setAiSearchFoods(cachedAiResults.results);
+      return cachedAiResults.results;
+    }
+
+    if (aiSearchInFlightKeyRef.current === cacheKey) return;
+
+    const requestId = aiSearchRequestIdRef.current + 1;
+    aiSearchRequestIdRef.current = requestId;
+    aiSearchInFlightKeyRef.current = cacheKey;
     setIsSearchingAI(true);
+
     try {
       const results = await searchSmartProducts(cleanQuery, apiKey, geminiModel);
       const formattedResults = (results || []).map(p => ({
@@ -1412,16 +1453,33 @@ export default function App() {
         ingredients: p.ingredients || null,
         icon: p.icon || "🔮"
       }));
+
+      aiSearchCacheRef.current.set(cacheKey, {
+        cachedAt: Date.now(),
+        results: formattedResults
+      });
+
+      if (requestId !== aiSearchRequestIdRef.current) {
+        return formattedResults;
+      }
+
       setAiSearchFoods(formattedResults);
+      return formattedResults;
     } catch (err) {
       console.error("Error in AI smart search:", err);
+      return [];
     } finally {
-      setIsSearchingAI(false);
+      if (aiSearchInFlightKeyRef.current === cacheKey) {
+        aiSearchInFlightKeyRef.current = '';
+      }
+      if (requestId === aiSearchRequestIdRef.current) {
+        setIsSearchingAI(false);
+      }
     }
   };
 
   // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
-  const combinedFoods = [
+  const combinedFoods = useMemo(() => [
     ...productCatalog,
     ...mockFoods,
     ...customFoods.map(f => ({ 
@@ -1438,19 +1496,21 @@ export default function App() {
       brand: f.brand || "Штрих-код",
       icon: "🏷️"
     }))
-  ];
+  ], [customFoods, customBarcodes]);
 
-  const filteredSearchFoods = combinedFoods.filter(food => {
-    const normalizedQuery = searchQuery.toLowerCase().trim();
-    const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
-    const foodSearchText = [
-      food.name,
-      food.brand,
-      food.supermarket,
-      food.category,
-      food.searchText
-    ].filter(Boolean).join(' ').toLowerCase();
-    const matchesQuery = queryTokens.length === 0 || queryTokens.every(token => foodSearchText.includes(token));
+  const indexedCombinedFoods = useMemo(() => (
+    combinedFoods.map(food => ({
+      ...food,
+      searchIndexText: getFoodSearchText(food)
+    }))
+  ), [combinedFoods]);
+
+  const normalizedSearchQuery = useMemo(() => normalizeSearchText(searchQuery), [searchQuery]);
+  const searchTokens = useMemo(() => normalizedSearchQuery.split(/\s+/).filter(Boolean), [normalizedSearchQuery]);
+  const favoriteNameSet = useMemo(() => new Set(favorites.map(fav => normalizeSearchText(fav.name))), [favorites]);
+
+  const filteredSearchFoods = useMemo(() => indexedCombinedFoods.filter(food => {
+    const matchesQuery = searchTokens.length === 0 || searchTokens.every(token => food.searchIndexText.includes(token));
     if (!matchesQuery) return false;
 
     if (selectedCategoryFilter === 'Усі') return true;
@@ -1489,22 +1549,30 @@ export default function App() {
     if (selectedCategoryFilter === 'Вечеря') return food.category === 'Вечеря';
     if (selectedCategoryFilter === 'Перекуси') return food.category === 'Перекус' || food.category === 'Перший перекус' || food.category === 'Другий перекус';
     if (selectedCategoryFilter === 'Обрані') {
-      return favorites.some(fav => fav.name === food.name);
+      return favoriteNameSet.has(normalizeSearchText(food.name));
     }
     return true;
-  });
+  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, favoriteNameSet]);
 
-  const filteredExternalSearchFoods = externalSearchFoods.filter(food => {
+  const filteredExternalSearchFoods = useMemo(() => externalSearchFoods.filter(food => {
     if (selectedCategoryFilter === 'Усі') return true;
     if (selectedCategoryFilter === 'Супермаркети') return true;
     return false;
-  });
+  }), [externalSearchFoods, selectedCategoryFilter]);
 
-  const filteredAiSearchFoods = aiSearchFoods.filter(food => {
+  const filteredAiSearchFoods = useMemo(() => aiSearchFoods.filter(food => {
     if (selectedCategoryFilter === 'Усі') return true;
     if (selectedCategoryFilter === 'Супермаркети') return true;
     return false;
-  });
+  }), [aiSearchFoods, selectedCategoryFilter]);
+
+  const searchSuggestions = useMemo(() => {
+    if (searchTokens.length === 0 || !showSuggestions) return [];
+
+    return indexedCombinedFoods
+      .filter(food => searchTokens.every(token => food.searchIndexText.includes(token)))
+      .slice(0, MAX_SEARCH_SUGGESTIONS);
+  }, [indexedCombinedFoods, searchTokens, showSuggestions]);
   // Оновлення ваги страви з пропорційним перерахунком КБЖВ
   const handleUpdateMealWeight = (mealId, value) => {
     setMeals(prevMeals => prevMeals.map(meal => {
@@ -2932,21 +3000,7 @@ export default function App() {
 
                   {/* Autocomplete Suggestions Dropdown */}
                   {(() => {
-                    if (searchQuery.length === 0 || !showSuggestions) return null;
-                    
-                    const suggestionTokens = searchQuery.toLowerCase().trim().split(/\s+/).filter(Boolean);
-                    const suggestions = combinedFoods.filter(food => {
-                      const foodSearchText = [
-                        food.name,
-                        food.brand,
-                        food.supermarket,
-                        food.category,
-                        food.searchText
-                      ].filter(Boolean).join(' ').toLowerCase();
-                      return suggestionTokens.every(token => foodSearchText.includes(token));
-                    }).slice(0, 6);
-
-                    if (suggestions.length === 0) return null;
+                    if (searchSuggestions.length === 0) return null;
 
                     return (
                       <div className="autocomplete-dropdown" style={{
@@ -2962,7 +3016,7 @@ export default function App() {
                         maxHeight: '220px',
                         overflowY: 'auto'
                       }}>
-                        {suggestions.map(food => (
+                        {searchSuggestions.map(food => (
                           <div
                             key={food.id}
                             className="autocomplete-item"

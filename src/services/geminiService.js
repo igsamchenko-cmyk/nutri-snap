@@ -87,7 +87,9 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
       }
     ],
     generationConfig: {
-      responseMimeType: "application/json"
+      responseMimeType: "application/json",
+      temperature: 0.2,
+      maxOutputTokens: 1200
     }
   };
 
@@ -147,7 +149,9 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
       }
     ],
     generationConfig: {
-      responseMimeType: "application/json"
+      responseMimeType: "application/json",
+      temperature: 0.2,
+      maxOutputTokens: 1200
     }
   };
 
@@ -198,7 +202,9 @@ export async function estimateFoodNutritionByName(foodName, apiKey, modelName = 
       }
     ],
     generationConfig: {
-      responseMimeType: "application/json"
+      responseMimeType: "application/json",
+      temperature: 0.2,
+      maxOutputTokens: 1200
     }
   };
 
@@ -261,7 +267,9 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
       }
     ],
     generationConfig: {
-      responseMimeType: "application/json"
+      responseMimeType: "application/json",
+      temperature: 0.2,
+      maxOutputTokens: 1200
     }
   };
 
@@ -331,7 +339,9 @@ export async function searchSmartProducts(query, apiKey, modelName = 'gemini-2.5
       }
     ],
     generationConfig: {
-      responseMimeType: "application/json"
+      responseMimeType: "application/json",
+      temperature: 0.2,
+      maxOutputTokens: 1200
     }
   };
 
