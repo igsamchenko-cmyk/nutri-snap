@@ -56,18 +56,25 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
 
   const promptText = `
     Проаналізуй це фото їжі. Визнач головну страву або продукт харчування на знімку.
-    Оціни приблизну вагу страви в грамах та вирахуй харчочу цінність:
-    калорійність (ккал), білки (г), жири (г) та вуглеводи (г).
+
+    ВАЖЛИВЕ ПРАВИЛО ТОЧНОСТІ:
+    - Якщо на фото звичайна готова страва без етикетки, можеш дати тільки приблизну оцінку ваги та КБЖВ.
+    - Якщо на фото упаковка/товар, але таблиця харчової цінності НЕ читається чітко, НЕ ВИГАДУЙ КБЖВ. У такому випадку поверни calories/protein/fat/carbs як null, confidence не більше 45, dataQuality: "insufficient", needsManualNutrition: true.
+    - Якщо на фото упаковка і таблиця харчової цінності чітко читається, зчитай КБЖВ саме з етикетки на 100 г і встанови dataQuality: "label_read".
+    - Не використовуй загальні знання бренду як точні дані для конкретної упаковки.
     
     Ти ПОВИНЕН повернути відповідь виключно у форматі JSON українською мовою з наступними полями:
     - "name": Назва страви або продукту (наприклад: "Куряче філе гриль з рисом")
-    - "calories": Калорійність у ккал (ціле число)
-    - "protein": Білки в грамах (число, округлене до 1 знака)
-    - "fat": Жири в грамах (число, округлене до 1 знака)
-    - "carbs": Вуглеводи в грамах (число, округлене до 1 знака)
+    - "calories": Калорійність у ккал (ціле число або null якщо надійно не визначено)
+    - "protein": Білки в грамах (число, округлене до 1 знака або null)
+    - "fat": Жири в грамах (число, округлене до 1 знака або null)
+    - "carbs": Вуглеводи в грамах (число, округлене до 1 знака або null)
     - "weight": Оціночна вага порції в грамах (ціле число, наприклад: 250)
-    - "confidence": Твоя впевненість у розпізнаванні від 50 до 99 (ціле число)
+    - "confidence": Твоя впевненість у розпізнаванні від 0 до 99 (ціле число)
     - "ingredients": Основні інгредієнти одним реченням (наприклад: "куряче філе, рис, оливкова олія, броколі")
+    - "dataQuality": "estimate" для приблизної оцінки страви, "label_read" для даних з читабельної етикетки, "insufficient" якщо КБЖВ не можна надійно визначити
+    - "needsManualNutrition": true якщо користувачу треба вручну ввести КБЖВ з етикетки, інакше false
+    - "warning": коротке попередження для користувача українською мовою
 
     Формат відповіді має бути чистим JSON об'єктом, без markdown розмітки на кшталт \`\`\`json.
   `;
@@ -104,7 +111,12 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
 
     // Парсимо JSON
     const parsedData = JSON.parse(textResponse);
-    return parsedData;
+    return {
+      ...parsedData,
+      dataQuality: parsedData.dataQuality || "estimate",
+      needsManualNutrition: Boolean(parsedData.needsManualNutrition),
+      warning: parsedData.warning || "КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням."
+    };
 
   } catch (error) {
     console.error("Error in analyzeFoodImage:", error);
@@ -234,6 +246,7 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
 
   const promptText = `
     Проаналізуй це зображення упаковки продукту харчування (зокрема таблицю харчової цінності або опис КБЖВ).
+    НЕ ВИГАДУЙ харчові дані. Якщо таблиця харчової цінності або КБЖВ не читаються чітко на фото, поверни calories/protein/fat/carbs як null, dataQuality: "insufficient", needsManualNutrition: true.
     Твоє завдання:
     1. Визначити назву продукту та бренд (наприклад, "Agrola - Хліб зерновий").
     2. Знайти калорійність (ккал), білки (г), жири (г) та вуглеводи (г) НА 100г продукту.
@@ -242,12 +255,15 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
     
     Ти ПОВИНЕН повернути відповідь виключно у форматі JSON українською мовою з наступними полями:
     - "name": Назва продукту разом з брендом
-    - "calories": Калорійність на 100г у ккал (ціле число)
-    - "protein": Білки на 100г в грамах (число, огруглене до 1 знака)
-    - "fat": Жири на 100г в грамах (число, огруглене до 1 знака)
-    - "carbs": Вуглеводи на 100г в грамах (число, огруглене до 1 знака)
+    - "calories": Калорійність на 100г у ккал (ціле число або null)
+    - "protein": Білки на 100г в грамах (число, округлене до 1 знака або null)
+    - "fat": Жири на 100г в грамах (число, округлене до 1 знака або null)
+    - "carbs": Вуглеводи на 100г в грамах (число, округлене до 1 знака або null)
     - "weight": Загальна вага упаковки або порції в грамах (ціле число, за замовчуванням 100)
     - "ingredients": Склад продукту (одним реченням, або null якщо не вказано)
+    - "dataQuality": "label_read" якщо дані зчитані з етикетки, або "insufficient" якщо КБЖВ не читаються
+    - "needsManualNutrition": true якщо користувачу треба вручну ввести КБЖВ з етикетки, інакше false
+    - "warning": коротке попередження для користувача українською мовою
     
     Формат відповіді має бути чистим JSON об'єктом, без markdown розмітки на кшталт \`\`\`json.
   `;
@@ -281,7 +297,12 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
     }
 
     const parsedData = JSON.parse(textResponse);
-    return parsedData;
+    return {
+      ...parsedData,
+      dataQuality: parsedData.dataQuality || "insufficient",
+      needsManualNutrition: Boolean(parsedData.needsManualNutrition),
+      warning: parsedData.warning || "Використовуйте тільки дані, які видно на етикетці."
+    };
   } catch (error) {
     console.error("Error in analyzeProductPackagingImage:", error);
     if (error instanceof SyntaxError) {

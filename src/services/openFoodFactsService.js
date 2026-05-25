@@ -110,18 +110,20 @@ function detectSupermarket(product) {
   return "";
 }
 
-function hasUsefulNutrition(nutriments) {
+function hasCompleteNutrition(nutriments) {
   if (!nutriments) return false;
-  return [
-    "energy-kcal_100g",
-    "energy-kcal",
-    "proteins_100g",
-    "proteins",
-    "fat_100g",
-    "fat",
-    "carbohydrates_100g",
-    "carbohydrates"
-  ].some(key => nutriments[key] !== undefined && nutriments[key] !== null && nutriments[key] !== "");
+
+  const hasValue = (...keys) => keys.some(key => {
+    const value = nutriments[key];
+    return value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value));
+  });
+
+  return (
+    hasValue("energy-kcal_100g", "energy-kcal") &&
+    hasValue("proteins_100g", "proteins") &&
+    hasValue("fat_100g", "fat") &&
+    hasValue("carbohydrates_100g", "carbohydrates")
+  );
 }
 
 function getProductName(product) {
@@ -138,7 +140,7 @@ function normalizeProduct(product) {
 
   const brand = getPrimaryBrand(product);
   const nutriments = product.nutriments || {};
-  if (!hasUsefulNutrition(nutriments)) return null;
+  if (!hasCompleteNutrition(nutriments)) return null;
 
   const calories = Math.round(toNumber(nutriments["energy-kcal_100g"] ?? nutriments["energy-kcal"]));
   const protein = roundMacro(nutriments.proteins_100g ?? nutriments.proteins);
@@ -166,6 +168,7 @@ function normalizeProduct(product) {
     ingredients: ingredients ? cleanText(ingredients) : null,
     source: "openfoodfacts",
     sourceLabel: supermarket ? `${supermarket} / OFF` : "Open Food Facts",
+    dataQuality: "database",
     cachedAt: Date.now(),
     searchText: normalizeText([
       fullName,
@@ -399,7 +402,7 @@ export async function getProductByBarcode(barcode) {
 
   const product = normalizeProduct(data.product);
   if (!product) {
-    throw new Error("Продукт знайдено, але у ньому немає достатніх харчових даних.");
+    throw new Error("Продукт знайдено, але в базі немає повного набору КБЖВ. Щоб не показувати неправильні нулі, додайте дані з етикетки вручну.");
   }
 
   await cacheProducts([product]);

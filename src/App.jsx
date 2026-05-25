@@ -54,6 +54,10 @@ const getFoodSearchText = (food) =>
     food.searchText
   ].filter(Boolean).join(' '));
 
+const hasCompleteNutritionValues = (item) => (
+  ["calories", "protein", "fat", "carbs"].every(field => Number.isFinite(Number(item?.[field])))
+);
+
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -740,7 +744,18 @@ export default function App() {
       }
       // Запит до реального Gemini API
       const result = await analyzeFoodImage(imageDataBase64, apiKey.trim(), geminiModel);
-      setScanResult(result);
+
+      if (result.needsManualNutrition || result.dataQuality === "insufficient" || !hasCompleteNutritionValues(result)) {
+        throw new Error(result.warning || "Не вдалося надійно визначити КБЖВ з фото. Щоб не показувати неправильні дані, введіть значення з етикетки вручну.");
+      }
+
+      const verifiedResult = {
+        ...result,
+        dataQuality: result.dataQuality || "estimate",
+        warning: result.warning || "КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням."
+      };
+
+      setScanResult(verifiedResult);
       setEditedWeight(Number(result.weight) || 200);
       setScannedProtein(Number(result.protein) || 0);
       setScannedFat(Number(result.fat) || 0);
@@ -949,6 +964,21 @@ export default function App() {
     return await getProductByBarcode(cleanBarcode);
   };
 
+  const setVerifiedBarcodeProduct = (product) => {
+    if (!hasCompleteNutritionValues(product)) {
+      throw new Error("У знайденого продукту немає повного набору КБЖВ. Щоб не показувати неправильні дані, внесіть значення з етикетки вручну.");
+    }
+
+    setBarcodeResult(product);
+    const w = product.weight || 100;
+    setBarcodeEditedWeight(w);
+    const scale = w / 100;
+    setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
+    setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
+    setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
+    setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+  };
+
   // Запуск аналізу штрих-коду ШІ
   const triggerBarcodeScan = async (imageDataBase64) => {
     setIsBarcodeScanning(true);
@@ -972,14 +1002,7 @@ export default function App() {
       
       setBarcodeLoading(true);
       const product = await resolveBarcodeProduct(barcodeVal);
-      setBarcodeResult(product);
-      const w = product.weight || 100;
-      setBarcodeEditedWeight(w);
-      const scale = w / 100;
-      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
-      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
-      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
-      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+      setVerifiedBarcodeProduct(product);
     } catch (err) {
       console.error(err);
       setBarcodeError(err.message || "Помилка при зчитуванні штрих-коду.");
@@ -1031,14 +1054,7 @@ export default function App() {
     
     try {
       const product = await resolveBarcodeProduct(barcodeVal);
-      setBarcodeResult(product);
-      const w = product.weight || 100;
-      setBarcodeEditedWeight(w);
-      const scale = w / 100;
-      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
-      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
-      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
-      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+      setVerifiedBarcodeProduct(product);
       
       // Вібрація для зворотного зв'язку при успішному зчитуванні
       if (navigator.vibrate) {
@@ -1084,7 +1100,10 @@ export default function App() {
       carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
       weight: 100, // Базові нутрієнти зберігаємо на 100г
       brand: "Мій продукт",
-      icon: "🏷️"
+      icon: "🏷️",
+      source: "manual",
+      sourceLabel: "Введено вручну",
+      dataQuality: "manual"
     };
 
     setCustomFoods(prev => [newFood, ...prev]);
@@ -1130,7 +1149,10 @@ export default function App() {
       carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
       weight: 100, // Базові нутрієнти зберігаємо на 100г
       brand: "Мій продукт",
-      icon: "🏷️"
+      icon: "🏷️",
+      source: "manual",
+      sourceLabel: "Введено вручну",
+      dataQuality: "manual"
     };
 
     setCustomBarcodes(prev => ({
@@ -1251,18 +1273,18 @@ export default function App() {
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     
     try {
-      const product = await getProductByBarcode(barcodeInput);
-      setBarcodeResult(product);
-      const w = product.weight || 100;
-      setBarcodeEditedWeight(w);
-      const scale = w / 100;
-      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
-      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
-      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
-      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+      const product = await resolveBarcodeProduct(barcodeInput);
+      setVerifiedBarcodeProduct(product);
     } catch (err) {
       console.error("Barcode lookup error:", err);
       setBarcodeError(err.message || "Не вдалося знайти продукт.");
+      setBarcodeNotFound(barcodeInput.trim());
+      setFallbackName('');
+      setFallbackCalories('');
+      setFallbackProtein('');
+      setFallbackFat('');
+      setFallbackCarbs('');
+      setFallbackWeight('100');
     } finally {
       setBarcodeLoading(false);
     }
@@ -2492,12 +2514,34 @@ export default function App() {
                       <div className="results-header" style={{ marginBottom: '8px' }}>
                         <div>
                           <span className="match-badge">
-                            Точність розпізнавання: {scanResult.confidence}%
+                            {scanResult.dataQuality === "label_read"
+                              ? "КБЖВ зчитано з етикетки"
+                              : `Оцінка ШІ: ${scanResult.confidence || 0}% впевненості`}
                           </span>
                           <h2 className="dish-title">{scanResult.name}</h2>
                         </div>
                         <span style={{ fontSize: '28px' }}>🥗</span>
                       </div>
+
+                      {scanResult.dataQuality !== "label_read" && (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                          padding: '10px 12px',
+                          marginBottom: '12px',
+                          borderRadius: '12px',
+                          background: 'rgba(245, 158, 11, 0.12)',
+                          border: '1px solid rgba(245, 158, 11, 0.25)',
+                          color: '#fbbf24',
+                          fontSize: '12px',
+                          lineHeight: 1.4,
+                          textAlign: 'left'
+                        }}>
+                          <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
+                          <span>{scanResult.warning || "Це приблизна оцінка з фото, не точні дані з етикетки. Перед додаванням перевірте вагу та КБЖВ."}</span>
+                        </div>
+                      )}
 
                       <div className="results-macros-grid">
                         <div className="results-macro-box box-kcal">
@@ -2753,9 +2797,32 @@ export default function App() {
                           <div>
                             <span className="match-badge">Знайдено за штрих-кодом</span>
                             <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px' }}>{barcodeResult.name}</h2>
+                            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
+                              Джерело: {barcodeResult.sourceLabel || barcodeResult.source || "база продуктів"}
+                            </div>
                           </div>
                         </div>
                       </div>
+
+                      {barcodeResult.source === "openfoodfacts" && (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                          padding: '10px 12px',
+                          marginBottom: '12px',
+                          borderRadius: '12px',
+                          background: 'rgba(59, 130, 246, 0.12)',
+                          border: '1px solid rgba(59, 130, 246, 0.25)',
+                          color: '#93c5fd',
+                          fontSize: '12px',
+                          lineHeight: 1.4,
+                          textAlign: 'left'
+                        }}>
+                          <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
+                          <span>Дані взято з Open Food Facts. Додаток показує їх тільки якщо в базі є повний набір КБЖВ, але етикетка продукту все одно є головним джерелом правди.</span>
+                        </div>
+                      )}
 
                       <div className="results-macros-grid">
                         <div className="results-macro-box box-kcal">
