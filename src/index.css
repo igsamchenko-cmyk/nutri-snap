@@ -62,6 +62,7 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
+  overscroll-behavior: none;
   transition: var(--transition-smooth);
 }
 
@@ -135,37 +136,72 @@ body.light-mode .app-container::after {
 
 /* Mobile responsive bypass of the desktop frame */
 @media (max-width: 480px) {
+  html {
+    background: var(--bg-dark);
+    min-height: 100%;
+    min-height: 100dvh;
+    overscroll-behavior: none;
+  }
+
   html, body {
     position: fixed;
+    inset: 0;
     width: 100%;
     height: 100%;
     overflow: hidden;
-    -webkit-overflow-scrolling: touch;
   }
+
   body {
     padding: 0;
     align-items: stretch;
+    background: var(--bg-dark);
+    touch-action: pan-y;
   }
+
+  body.light-mode {
+    background: var(--bg-light);
+  }
+
+  #root {
+    width: 100%;
+    height: 100%;
+    min-height: 100dvh;
+    align-items: stretch;
+  }
+
   .app-container {
+    position: fixed;
+    inset: 0;
     max-width: 100%;
+    max-height: none;
+    width: 100%;
     height: 100vh;
     height: 100dvh;
+    min-height: 100svh;
     border-radius: 0;
     border: none;
+    box-shadow: none;
+    isolation: isolate;
   }
+
   .app-header {
-    padding-top: calc(env(safe-area-inset-top, 20px) + 24px); /* Збільшений відступ для статус-бару */
+    padding-top: calc(env(safe-area-inset-top, 0px) + 16px);
   }
+
   .bottom-nav {
     position: absolute;
-    bottom: calc(env(safe-area-inset-bottom, 24px) + 36px); /* Збільшений відступ для панелі навігації Android/iOS */
+    bottom: max(12px, env(safe-area-inset-bottom, 0px));
   }
+
   .scan-fab {
     position: absolute;
-    bottom: calc(env(safe-area-inset-bottom, 24px) + 40px); /* Відповідно до навігації */
+    bottom: calc(max(12px, env(safe-area-inset-bottom, 0px)) + 3px);
   }
+
   .app-content {
-    padding-bottom: calc(env(safe-area-inset-bottom, 24px) + 140px); /* Захист останніх елементів списку */
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: calc(104px + max(12px, env(safe-area-inset-bottom, 0px)));
   }
 }
 
