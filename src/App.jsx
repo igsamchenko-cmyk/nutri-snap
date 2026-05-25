@@ -2147,16 +2147,6 @@ export default function App() {
                       {catMeals.length === 0 ? (
                         <div className="category-empty-placeholder">
                           <span>Немає страв</span>
-                          <span 
-                            className="category-quick-add-link"
-                            onClick={() => {
-                              setPreselectedCategory(cat.name);
-                              setScannerMode('search');
-                              changeTab('scanner');
-                            }}
-                          >
-                            + Додати
-                          </span>
                         </div>
                       ) : (
                         <div className="category-meals-list">
@@ -3641,7 +3631,8 @@ export default function App() {
                             className="category-add-btn" 
                             onClick={() => {
                               setPreselectedCategory(cat.name);
-                              setActiveTab('scanner');
+                              setScannerMode('search');
+                              changeTab('scanner');
                             }}
                             title={`Додати до: ${cat.name}`}
                           >
@@ -3653,15 +3644,6 @@ export default function App() {
                       {catMeals.length === 0 ? (
                         <div className="category-empty-placeholder">
                           <span>Немає страв</span>
-                          <span 
-                            className="category-quick-add-link"
-                            onClick={() => {
-                              setPreselectedCategory(cat.name);
-                              setActiveTab('scanner');
-                            }}
-                          >
-                            + Додати
-                          </span>
                         </div>
                       ) : (
                         <div className="category-meals-list">

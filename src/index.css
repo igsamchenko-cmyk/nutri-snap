@@ -2021,22 +2021,6 @@ body.light-mode .category-empty-placeholder {
   background: rgba(0, 0, 0, 0.005);
 }
 
-.category-quick-add-link {
-  color: var(--color-accent);
-  font-weight: 600;
-  text-decoration: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  transition: opacity 0.2s ease;
-}
-
-.category-quick-add-link:hover {
-  opacity: 0.8;
-}
-
 .category-select {
   background: #1e293b;
   border: 1px solid var(--border-dark);
