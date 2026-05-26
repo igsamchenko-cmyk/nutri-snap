@@ -26,6 +26,7 @@ import {
   Database,
   Star,
   Search,
+  Pencil,
   X
 } from 'lucide-react';
 import {
@@ -451,6 +452,7 @@ export default function App() {
   const [customFoodFat, setCustomFoodFat] = useState('');
   const [customFoodCarbs, setCustomFoodCarbs] = useState('');
   const [customFoodWeight, setCustomFoodWeight] = useState('100');
+  const [customFoodEditTarget, setCustomFoodEditTarget] = useState(null);
 
   // Fallback states for when a scanned barcode is not found
   const [barcodeNotFound, setBarcodeNotFound] = useState(null); // stores the scanned barcode string
@@ -859,6 +861,50 @@ export default function App() {
   };
 
   // Запуск аналізу
+  const resetCustomFoodForm = () => {
+    setCustomFoodName('');
+    setCustomFoodCalories('');
+    setCustomFoodProtein('');
+    setCustomFoodFat('');
+    setCustomFoodCarbs('');
+    setCustomFoodWeight('100');
+    setCustomFoodEditTarget(null);
+  };
+
+  const closeCustomFoodModal = () => {
+    setIsCustomFoodModalOpen(false);
+    setCustomFoodEditTarget(null);
+  };
+
+  const openCustomFoodForm = (prefill = {}, editTarget = null) => {
+    setCustomFoodName(prefill.name || '');
+    setCustomFoodCalories(prefill.calories !== undefined ? String(prefill.calories) : '');
+    setCustomFoodProtein(prefill.protein !== undefined ? String(prefill.protein) : '');
+    setCustomFoodFat(prefill.fat !== undefined ? String(prefill.fat) : '');
+    setCustomFoodCarbs(prefill.carbs !== undefined ? String(prefill.carbs) : '');
+    setCustomFoodWeight(prefill.weight !== undefined ? String(prefill.weight) : '100');
+    setCustomFoodEditTarget(editTarget);
+    setIsCustomFoodModalOpen(true);
+  };
+
+  const openCustomFoodEditor = (food) => {
+    if (!food?.isCustom && !food?.isCustomBarcode) return;
+
+    openCustomFoodForm(
+      {
+        name: food.name,
+        calories: food.calories,
+        protein: food.protein,
+        fat: food.fat,
+        carbs: food.carbs,
+        weight: food.weight || 100
+      },
+      food.isCustomBarcode
+        ? { type: 'barcode', barcode: food.barcode }
+        : { type: 'food', id: food.id }
+    );
+  };
+
   const triggerScan = async (imageDataBase64) => {
     setIsScanning(true);
     setScanResult(null);
@@ -888,6 +934,7 @@ export default function App() {
       setScannedCalories(Number(result.calories) || 0);
     } catch (err) {
       console.error(err);
+      openCustomFoodForm({ weight: 100 });
       showToast(err.message || "Помилка під час аналізу страви.", "error");
     } finally {
       setIsScanning(false);
@@ -1241,40 +1288,78 @@ export default function App() {
     const carbsVal = Number(customFoodCarbs) || 0;
     const defaultWeightVal = Number(customFoodWeight) || 100;
 
-    // Створюємо продукт, приведений до 100г
     const scaleTo100 = defaultWeightVal > 0 ? (100 / defaultWeightVal) : 1;
-    const newFood = {
-      id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    const now = new Date().toISOString();
+    const normalizedFood = {
       name: customFoodName.trim(),
       calories: Math.round(kcalVal * scaleTo100),
       protein: Math.round(proteinVal * scaleTo100 * 10) / 10,
       fat: Math.round(fatVal * scaleTo100 * 10) / 10,
       carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
-      weight: 100, // Базові нутрієнти зберігаємо на 100г
+      weight: 100,
       brand: "Моя база",
       icon: "🏷️",
       source: "manual",
       sourceLabel: "Моя база",
       dataQuality: "manual",
       searchText: `${customFoodName.trim()} моя база введено вручну`.toLowerCase(),
-      createdAt: new Date().toISOString()
+      updatedAt: now
+    };
+
+    if (customFoodEditTarget?.type === 'barcode') {
+      const barcode = customFoodEditTarget.barcode;
+      const updatedProduct = {
+        ...(customBarcodes[barcode] || {}),
+        ...normalizedFood,
+        barcode,
+        id: customBarcodes[barcode]?.id || `barcode-${barcode}`,
+        createdAt: customBarcodes[barcode]?.createdAt || now
+      };
+
+      setCustomBarcodes(prev => ({
+        ...prev,
+        [barcode]: updatedProduct
+      }));
+      setSelectedSearchFood(prev => prev?.isCustomBarcode && prev.barcode === barcode ? { ...updatedProduct, isCustomBarcode: true } : prev);
+      setBarcodeResult(prev => prev?.barcode === barcode ? updatedProduct : prev);
+      showToast(`"${updatedProduct.name}" оновлено у вашій базі.`, "success");
+      closeCustomFoodModal();
+      resetCustomFoodForm();
+      return;
+    }
+
+    if (customFoodEditTarget?.type === 'food') {
+      const updatedFood = {
+        ...normalizedFood,
+        id: customFoodEditTarget.id,
+        createdAt: customFoods.find(food => food.id === customFoodEditTarget.id)?.createdAt || now
+      };
+
+      setCustomFoods(prev => prev.map(food => (
+        food.id === customFoodEditTarget.id ? { ...food, ...updatedFood } : food
+      )));
+      setSelectedSearchFood(prev => prev?.isCustom && prev.id === customFoodEditTarget.id ? { ...updatedFood, isCustom: true } : prev);
+      showToast(`"${updatedFood.name}" оновлено у вашій базі.`, "success");
+      closeCustomFoodModal();
+      resetCustomFoodForm();
+      return;
+    }
+
+    const newFood = {
+      ...normalizedFood,
+      id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      createdAt: now
     };
 
     setCustomFoods(prev => [newFood, ...prev]);
 
-    // Скидаємо форму
-    setCustomFoodName('');
-    setCustomFoodCalories('');
-    setCustomFoodProtein('');
-    setCustomFoodFat('');
-    setCustomFoodCarbs('');
-    setCustomFoodWeight('100');
-    setIsCustomFoodModalOpen(false);
+    closeCustomFoodModal();
+    resetCustomFoodForm();
 
     showToast(`"${newFood.name}" збережено у вашу базу продуктів!`, "success");
 
     // Відразу відкриваємо діалог додавання до щоденника
-    setSelectedSearchFood(newFood);
+    setSelectedSearchFood({ ...newFood, isCustom: true });
     setSearchFoodWeight(defaultWeightVal);
     setSearchMealCategory(getDefaultCategory());
   };
@@ -1915,6 +2000,8 @@ export default function App() {
         meals,
         waterIntake,
         profile,
+        customFoods,
+        customBarcodes,
         apiKey: apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey,
         openAiApiKey,
         openAiProxyUrl,
@@ -1970,6 +2057,12 @@ export default function App() {
         }
         if (importedData.profile && typeof importedData.profile === 'object') {
           setProfile(prev => ({ ...prev, ...importedData.profile }));
+        }
+        if (Array.isArray(importedData.customFoods)) {
+          setCustomFoods(importedData.customFoods);
+        }
+        if (importedData.customBarcodes && typeof importedData.customBarcodes === 'object') {
+          setCustomBarcodes(importedData.customBarcodes);
         }
         if (importedData.apiKey !== undefined) {
           const importedApiKey = String(importedData.apiKey || '').trim();
@@ -2584,7 +2677,7 @@ export default function App() {
                         NutriSnap Фотосканер
                       </h3>
                       <p style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '280px', marginBottom: '24px', lineHeight: '1.6' }}>
-                        Увімкніть камеру або оберіть зображення з галереї для миттєвого розрахунку калорій та КБЖВ.
+                        Фото ШІ може помилятися або впиратися в квоти. Для точного запису відкрийте ручне внесення КБЖВ з етикетки.
                       </p>
                       
                       {cameraError && (
@@ -2634,6 +2727,15 @@ export default function App() {
                       >
                         <Upload size={18} />
                         <span>Завантажити фото</span>
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => openCustomFoodForm({ weight: 100 })}
+                        disabled={!allowCameraTrigger}
+                        style={{ width: '100%', maxWidth: '260px', marginTop: '10px', justifyContent: 'center' }}
+                      >
+                        <Plus size={18} />
+                        <span>Внести КБЖВ вручну</span>
                       </button>
                       <input 
                         ref={cameraFileInputRef}
@@ -3251,6 +3353,7 @@ export default function App() {
                       setCustomFoodFat('');
                       setCustomFoodCarbs('');
                       setCustomFoodWeight('100');
+                      setCustomFoodEditTarget(null);
                       setIsCustomFoodModalOpen(true);
                     }}
                   >
@@ -3417,6 +3520,7 @@ export default function App() {
                           setCustomFoodFat('');
                           setCustomFoodCarbs('');
                           setCustomFoodWeight('100');
+                          setCustomFoodEditTarget(null);
                           setIsCustomFoodModalOpen(true);
                         }}
                       >
@@ -3445,6 +3549,20 @@ export default function App() {
                               {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
                             </span>
                           </div>
+                          {(food.isCustom || food.isCustomBarcode) && (
+                            <button
+                              type="button"
+                              className="search-edit-btn"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openCustomFoodEditor(food);
+                              }}
+                              title="Редагувати КБЖВ"
+                              aria-label="Редагувати КБЖВ"
+                            >
+                              <Pencil size={15} />
+                            </button>
+                          )}
                           {food.brand && <span className="search-brand-badge">{food.brand}</span>}
                         </div>
                       ))}
@@ -3486,6 +3604,7 @@ export default function App() {
                               setCustomFoodFat('');
                               setCustomFoodCarbs('');
                               setCustomFoodWeight(food.weight || '100');
+                              setCustomFoodEditTarget(null);
                               setIsCustomFoodModalOpen(true);
                             }}
                           >
@@ -3516,6 +3635,7 @@ export default function App() {
                             setCustomFoodFat('');
                             setCustomFoodCarbs('');
                             setCustomFoodWeight(food.weight || '100');
+                            setCustomFoodEditTarget(null);
                             setIsCustomFoodModalOpen(true);
                           }}
                         >
@@ -3652,6 +3772,17 @@ export default function App() {
                                 <Check size={18} />
                                 Додати до щоденника
                               </button>
+                              {(selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode) && (
+                                <button
+                                  className="btn-secondary"
+                                  onClick={() => openCustomFoodEditor(selectedSearchFood)}
+                                  style={{ width: '46px', height: '46px', padding: 0, justifyContent: 'center' }}
+                                  title="Редагувати КБЖВ"
+                                  aria-label="Редагувати КБЖВ"
+                                >
+                                  <Pencil size={18} />
+                                </button>
+                              )}
                               <button 
                                 className={`btn-favorite-toggle ${isFavorite(selectedSearchFood.name) ? 'active' : ''}`}
                                 onClick={() => toggleFavoriteMeal(selectedSearchFood)}
@@ -4495,7 +4626,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.4.2 (Worker Proxy Setup)</p>
+              <p>NutriSnap v1.4.3 (Manual DB Editing)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
@@ -4595,11 +4726,11 @@ export default function App() {
       )}
       {/* Модальне вікно для створення продукту вручну */}
       {isCustomFoodModalOpen && (
-        <div className="modal-backdrop" onClick={() => setIsCustomFoodModalOpen(false)}>
+        <div className="modal-backdrop" onClick={closeCustomFoodModal}>
           <div className="modal-content glassmorphic-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>➕ Додати продукт у мою базу</h3>
-              <button className="modal-close-btn" onClick={() => setIsCustomFoodModalOpen(false)}>
+              <h3>{customFoodEditTarget ? '✏️ Редагувати продукт у моїй базі' : '➕ Додати продукт у мою базу'}</h3>
+              <button className="modal-close-btn" onClick={closeCustomFoodModal}>
                 <X size={16} />
               </button>
             </div>
@@ -4691,7 +4822,7 @@ export default function App() {
             <div className="modal-footer" style={{ marginTop: '20px' }}>
               <button 
                 className="btn-secondary" 
-                onClick={() => setIsCustomFoodModalOpen(false)}
+                onClick={closeCustomFoodModal}
                 style={{ padding: '10px 16px' }}
               >
                 Скасувати
@@ -4702,7 +4833,7 @@ export default function App() {
                 style={{ padding: '10px 20px' }}
               >
                 <Check size={18} />
-                Зберегти в базу
+                {customFoodEditTarget ? 'Оновити продукт' : 'Зберегти в базу'}
               </button>
             </div>
           </div>

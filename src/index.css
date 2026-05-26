@@ -924,18 +924,19 @@ body.light-mode .results-macro-box {
 }
 
 .macro-box-val {
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 700;
   font-family: var(--font-display);
   margin-bottom: 2px;
+  line-height: 1.05;
 }
 
 .macro-box-input {
-  width: 50px;
+  width: 62px;
   border: none;
   background: transparent;
   text-align: right;
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 700;
   font-family: var(--font-display);
   padding: 0;
@@ -951,8 +952,18 @@ body.light-mode .results-macro-box {
 }
 
 .macro-box-label {
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 650;
   color: var(--text-dark-secondary);
+}
+
+.results-macro-box .macro-box-val-wrapper span:first-child {
+  font-size: 22px !important;
+  line-height: 1.05;
+}
+
+.results-macro-box .macro-box-val-wrapper span:last-child {
+  font-size: 13px !important;
 }
 
 body.light-mode .macro-box-label {
@@ -2443,6 +2454,7 @@ body.light-mode .toast-message {
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
   color: var(--text-dark-primary);
   font-size: 12px;
+  pointer-events: none;
 }
 
 .app-update-banner span {
@@ -2461,6 +2473,7 @@ body.light-mode .toast-message {
   gap: 6px;
   cursor: pointer;
   white-space: nowrap;
+  pointer-events: auto;
 }
 
 body.light-mode .app-update-banner {
@@ -2626,16 +2639,35 @@ body.light-mode .filter-chip.active {
   gap: 8px;
 }
 
+.autocomplete-item span[style*="font-weight: 600"] {
+  font-size: 15px !important;
+  line-height: 1.25;
+}
+
+.autocomplete-item span[style*="font-size: 11px"] {
+  font-size: 12px !important;
+}
+
 .search-food-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 16px 16px;
   border-radius: 20px;
   cursor: pointer;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.04);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.search-food-item span[style*="font-weight: 600"] {
+  font-size: 16px !important;
+  line-height: 1.25;
+}
+
+.search-food-item span[style*="font-size: 11px"] {
+  font-size: 13px !important;
+  line-height: 1.35;
 }
 .search-food-item:hover {
   transform: translateY(-2px);
@@ -2654,13 +2686,31 @@ body.light-mode .search-food-item:hover {
 }
 
 .search-brand-badge {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  padding: 2px 6px;
+  padding: 4px 7px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-dark-secondary);
   border: 1px solid transparent;
+}
+
+.search-edit-btn {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(16, 185, 129, 0.22);
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--color-calories);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+body.light-mode .search-edit-btn {
+  background: rgba(16, 185, 129, 0.08);
 }
 body.light-mode .search-brand-badge {
   background: rgba(0, 0, 0, 0.05);
