@@ -2208,7 +2208,7 @@ export default function App() {
             <div className="glass-card">
               <div className="dashboard-summary">
                 <div className="circular-progress-container">
-                  <svg className="circular-progress-svg">
+                  <svg className="circular-progress-svg" viewBox="0 0 140 140" aria-label="Прогрес калорій за день">
                     <circle className="progress-bg-circle" cx="70" cy="70" r={radius} />
                     <circle 
                       className="progress-active-circle" 
@@ -2527,36 +2527,47 @@ export default function App() {
                               </div>
                               <div className="meal-calories-details">
                                 <span className="meal-kcal">{meal.calories} ккал</span>
-                                <span className="meal-macros" style={{ display: 'flex', alignItems: 'center', gap: '3px', flexWrap: 'wrap', marginTop: '3px' }}>
-                                  <span>Б:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.protein}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г Ж:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.fat}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г В:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.carbs}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г</span>
-                                </span>
+                                <div className="meal-macros">
+                                  <label className="meal-macro-edit-field">
+                                    <span>Білки</span>
+                                    <input
+                                      type="number"
+                                      value={meal.protein}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати білки"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                  <label className="meal-macro-edit-field">
+                                    <span>Жири</span>
+                                    <input
+                                      type="number"
+                                      value={meal.fat}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати жири"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                  <label className="meal-macro-edit-field">
+                                    <span>Вугл.</span>
+                                    <input
+                                      type="number"
+                                      value={meal.carbs}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати вуглеводи"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                </div>
                               </div>
                               <button 
                                 className={`meal-favorite-btn ${isFavorite(meal.name) ? 'active' : ''}`} 
@@ -3542,7 +3553,21 @@ export default function App() {
                         >
                           <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🥗'}</span>
                           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
-                            <span style={{ fontWeight: 600, fontSize: '14px', color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' }}>
+                            <span
+                              onClick={(event) => {
+                                if (food.isCustom || food.isCustomBarcode) {
+                                  event.stopPropagation();
+                                  openCustomFoodEditor(food);
+                                }
+                              }}
+                              title={food.isCustom || food.isCustomBarcode ? "Редагувати КБЖВ" : undefined}
+                              style={{
+                                fontWeight: 600,
+                                fontSize: '14px',
+                                color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)',
+                                cursor: food.isCustom || food.isCustomBarcode ? 'pointer' : 'default'
+                              }}
+                            >
                               {food.name}
                             </span>
                             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
@@ -3685,7 +3710,22 @@ export default function App() {
                         <div style={{ fontSize: '36px' }}>{selectedSearchFood.icon || '🥗'}</div>
                         <div style={{ textAlign: 'left' }}>
                           {selectedSearchFood.brand && <span className="match-badge">{selectedSearchFood.brand}</span>}
-                          <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px' }}>{selectedSearchFood.name}</h2>
+                          <h2
+                            className="dish-title"
+                            onClick={() => {
+                              if (selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode) {
+                                openCustomFoodEditor(selectedSearchFood);
+                              }
+                            }}
+                            title={selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode ? "Редагувати КБЖВ" : undefined}
+                            style={{
+                              fontSize: '18px',
+                              marginTop: '2px',
+                              cursor: selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode ? 'pointer' : 'default'
+                            }}
+                          >
+                            {selectedSearchFood.name}
+                          </h2>
                         </div>
                       </div>
                     </div>
@@ -4145,36 +4185,47 @@ export default function App() {
                               </div>
                               <div className="meal-calories-details">
                                 <span className="meal-kcal">{meal.calories} ккал</span>
-                                <span className="meal-macros" style={{ display: 'flex', alignItems: 'center', gap: '3px', flexWrap: 'wrap', marginTop: '3px' }}>
-                                  <span>Б:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.protein}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г Ж:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.fat}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г В:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.carbs}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г</span>
-                                </span>
+                                <div className="meal-macros">
+                                  <label className="meal-macro-edit-field">
+                                    <span>Білки</span>
+                                    <input
+                                      type="number"
+                                      value={meal.protein}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати білки"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                  <label className="meal-macro-edit-field">
+                                    <span>Жири</span>
+                                    <input
+                                      type="number"
+                                      value={meal.fat}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати жири"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                  <label className="meal-macro-edit-field">
+                                    <span>Вугл.</span>
+                                    <input
+                                      type="number"
+                                      value={meal.carbs}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати вуглеводи"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                </div>
                               </div>
                               <button 
                                 className={`meal-favorite-btn ${isFavorite(meal.name) ? 'active' : ''}`} 
@@ -4626,7 +4677,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.4.3 (Manual DB Editing)</p>
+              <p>NutriSnap v1.4.4 (Mobile Layout Polish)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
