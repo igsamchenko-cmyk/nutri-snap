@@ -4448,7 +4448,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.3.1 (GPT Food Scanner)</p>
+              <p>NutriSnap v1.3.2 (Mobile Nav Fix)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
