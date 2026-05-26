@@ -28,12 +28,23 @@ import {
   Search,
   X
 } from 'lucide-react';
-import { SERVER_GEMINI_API_KEY, analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSmartProducts } from './services/geminiService';
+import {
+  SERVER_GEMINI_API_KEY,
+  analyzeFoodImage as analyzeFoodImageWithGemini,
+  detectBarcodeFromImage as detectBarcodeFromImageWithGemini,
+  searchSmartProducts as searchSmartProductsWithGemini
+} from './services/geminiService';
+import {
+  analyzeFoodImageWithOpenAI,
+  detectBarcodeFromImageWithOpenAI,
+  searchSmartProductsWithOpenAI
+} from './services/openaiService';
 import { mockFoods } from './data/mockFood';
 import { productCatalog } from './data/products';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
+const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -193,6 +204,13 @@ export default function App() {
       return DEFAULT_API_KEY;
     }
   });
+  const [openAiApiKey, setOpenAiApiKey] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_openai_apikey') || '';
+    } catch {
+      return '';
+    }
+  });
   const [scanMode, setScanMode] = useState(() => {
     try {
       return localStorage.getItem('nutrisnap_scanmode') || (DEFAULT_API_KEY ? 'gemini' : 'mock');
@@ -205,6 +223,13 @@ export default function App() {
       return localStorage.getItem('nutrisnap_geminimodel') || 'gemini-2.5-flash';
     } catch (e) {
       return 'gemini-2.5-flash';
+    }
+  });
+  const [openAiModel, setOpenAiModel] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_openai_model') || DEFAULT_OPENAI_MODEL;
+    } catch {
+      return DEFAULT_OPENAI_MODEL;
     }
   });
 
@@ -526,12 +551,20 @@ export default function App() {
   }, [apiKey]);
 
   useEffect(() => {
+    localStorage.setItem('nutrisnap_openai_apikey', openAiApiKey.trim());
+  }, [openAiApiKey]);
+
+  useEffect(() => {
     localStorage.setItem('nutrisnap_scanmode', scanMode);
   }, [scanMode]);
 
   useEffect(() => {
     localStorage.setItem('nutrisnap_geminimodel', geminiModel);
   }, [geminiModel]);
+
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_openai_model', openAiModel);
+  }, [openAiModel]);
 
   useEffect(() => {
     localStorage.setItem('nutrisnap_theme', theme);
@@ -613,9 +646,10 @@ export default function App() {
 
     const delayTimer = setTimeout(async () => {
       try {
-        // Якщо є введений API-ключ Gemini, завжди запускаємо розумний пошук ШІ паралельно з OFF,
+        // Якщо є введений API-ключ ШІ, запускаємо розумний пошук паралельно з OFF,
         // щоб одразу отримувати сорти та варіації (яблуко Голден, Гала тощо)
-        if (apiKey && apiKey.trim() !== '') {
+        const aiConfig = getCurrentAiConfig();
+        if (scanMode !== 'mock' && aiConfig.apiKey) {
           triggerAISmartSearch(cleanQuery);
         }
 
@@ -644,7 +678,7 @@ export default function App() {
       cancelled = true;
       clearTimeout(delayTimer);
     };
-  }, [searchQuery, activeTab, scannerMode, apiKey]);
+  }, [searchQuery, activeTab, scannerMode, scanMode, apiKey, openAiApiKey, geminiModel, openAiModel]);
 
   // --- Camera Operations ---
   const startCamera = async () => {
@@ -743,17 +777,63 @@ export default function App() {
     bindVideo();
   }, [cameraActive, cameraStream]);
 
+  const getCurrentAiConfig = () => {
+    if (scanMode === 'openai') {
+      return {
+        provider: 'openai',
+        apiKey: openAiApiKey.trim(),
+        model: openAiModel,
+        displayName: 'OpenAI GPT'
+      };
+    }
+
+    return {
+      provider: 'gemini',
+      apiKey: apiKey.trim(),
+      model: geminiModel,
+      displayName: 'Gemini'
+    };
+  };
+
+  const analyzeFoodWithCurrentProvider = (imageDataBase64) => {
+    const config = getCurrentAiConfig();
+
+    if (!config.apiKey) {
+      throw new Error(`Будь ласка, введіть API-ключ ${config.displayName} у налаштуваннях додатку.`);
+    }
+
+    if (config.provider === 'openai') {
+      return analyzeFoodImageWithOpenAI(imageDataBase64, config.apiKey, config.model);
+    }
+
+    return analyzeFoodImageWithGemini(imageDataBase64, config.apiKey, config.model);
+  };
+
+  const detectBarcodeWithCurrentProvider = (imageDataBase64) => {
+    const config = getCurrentAiConfig();
+
+    if (!config.apiKey) {
+      throw new Error(`Будь ласка, введіть API-ключ ${config.displayName} у налаштуваннях додатку.`);
+    }
+
+    if (config.provider === 'openai') {
+      return detectBarcodeFromImageWithOpenAI(imageDataBase64, config.apiKey, config.model);
+    }
+
+    return detectBarcodeFromImageWithGemini(imageDataBase64, config.apiKey, config.model);
+  };
+
   // Запуск аналізу
   const triggerScan = async (imageDataBase64) => {
     setIsScanning(true);
     setScanResult(null);
     setScannedMealCategory(preselectedCategory || getDefaultCategory());
     try {
-      if (!apiKey || apiKey.trim() === '') {
-        throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+      if (scanMode === 'mock') {
+        throw new Error("Для фото-сканування оберіть GPT (OpenAI) або Gemini у налаштуваннях ШІ.");
       }
-      // Запит до реального Gemini API
-      const result = await analyzeFoodImage(imageDataBase64, apiKey.trim(), geminiModel);
+
+      const result = await analyzeFoodWithCurrentProvider(imageDataBase64);
 
       if (result.needsManualNutrition || result.dataQuality === "insufficient" || !hasCompleteNutritionValues(result)) {
         throw new Error(result.warning || "Не вдалося надійно визначити КБЖВ з фото. Щоб не показувати неправильні дані, введіть значення з етикетки вручну.");
@@ -1030,10 +1110,11 @@ export default function App() {
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     let detectedBarcode = null;
     try {
-      if (!apiKey || apiKey.trim() === '') {
-        throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+      if (scanMode === 'mock') {
+        throw new Error("Для розпізнавання штрих-коду з фото оберіть GPT (OpenAI) або Gemini у налаштуваннях ШІ.");
       }
-      const barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey.trim(), geminiModel);
+
+      const barcodeVal = await detectBarcodeWithCurrentProvider(imageDataBase64);
 
       if (!barcodeVal) {
         throw new Error("Не вдалося розпізнати штрих-код на фото. Спробуйте інший ракурс або введіть його вручну.");
@@ -1482,10 +1563,13 @@ export default function App() {
 
   const triggerAISmartSearch = async (queryToSearch) => {
     if (!queryToSearch || !queryToSearch.trim()) return;
-    if (!apiKey || apiKey.trim() === '') return;
+    if (scanMode === 'mock') return;
+
+    const aiConfig = getCurrentAiConfig();
+    if (!aiConfig.apiKey) return;
     
     const cleanQuery = queryToSearch.trim();
-    const cacheKey = `${geminiModel}:${normalizeSearchText(cleanQuery)}`;
+    const cacheKey = `${aiConfig.provider}:${aiConfig.model}:${normalizeSearchText(cleanQuery)}`;
     const cachedAiResults = aiSearchCacheRef.current.get(cacheKey);
 
     if (cachedAiResults && Date.now() - cachedAiResults.cachedAt < SEARCH_CACHE_TTL_MS) {
@@ -1501,7 +1585,9 @@ export default function App() {
     setIsSearchingAI(true);
 
     try {
-      const results = await searchSmartProducts(cleanQuery, apiKey, geminiModel);
+      const results = aiConfig.provider === 'openai'
+        ? await searchSmartProductsWithOpenAI(cleanQuery, aiConfig.apiKey, aiConfig.model)
+        : await searchSmartProductsWithGemini(cleanQuery, aiConfig.apiKey, aiConfig.model);
       const formattedResults = (results || []).map(p => ({
         id: p.id || `ai-market-${createMealId()}`,
         name: p.name,
@@ -1795,8 +1881,10 @@ export default function App() {
         waterIntake,
         profile,
         apiKey: apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey,
+        openAiApiKey,
         scanMode,
         geminiModel,
+        openAiModel,
         theme
       };
       
@@ -1851,11 +1939,17 @@ export default function App() {
           const importedApiKey = String(importedData.apiKey || '').trim();
           setApiKey(importedApiKey || DEFAULT_API_KEY);
         }
+        if (importedData.openAiApiKey !== undefined) {
+          setOpenAiApiKey(String(importedData.openAiApiKey || '').trim());
+        }
         if (importedData.scanMode !== undefined) {
           setScanMode(importedData.scanMode);
         }
         if (importedData.geminiModel !== undefined) {
           setGeminiModel(importedData.geminiModel);
+        }
+        if (importedData.openAiModel !== undefined) {
+          setOpenAiModel(importedData.openAiModel);
         }
         if (importedData.theme !== undefined) {
           setTheme(importedData.theme);
@@ -1920,11 +2014,11 @@ export default function App() {
             </button>
           )}
           <span className="brand-logo">NutriSnap</span>
-          {scanMode === 'gemini' && (
+          {(scanMode === 'gemini' || scanMode === 'openai') && (
             <span style={{ 
               fontSize: '10px', 
-              background: 'rgba(99, 102, 241, 0.15)', 
-              color: '#818cf8', 
+              background: scanMode === 'openai' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(99, 102, 241, 0.15)', 
+              color: scanMode === 'openai' ? '#34d399' : '#818cf8', 
               padding: '2px 6px', 
               borderRadius: '8px',
               display: 'flex',
@@ -1932,7 +2026,7 @@ export default function App() {
               gap: '3px',
               fontWeight: 600
             }}>
-              <Sparkles size={10} /> ШІ Gemini
+              <Sparkles size={10} /> {scanMode === 'openai' ? 'GPT' : 'ШІ Gemini'}
             </span>
           )}
         </div>
@@ -4140,6 +4234,7 @@ export default function App() {
                     onChange={(e) => setScanMode(e.target.value)}
                   >
                     <option value="mock">Симуляція (Локальна база страв)</option>
+                    <option value="openai">GPT (OpenAI API)</option>
                     <option value="gemini">Реальний ШІ (Gemini API)</option>
                   </select>
                 </div>
@@ -4221,6 +4316,86 @@ export default function App() {
                               onMouseOut={(e) => {
                                 e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
                                 e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                              }}
+                            >
+                              Перемкнути на Симуляцію (Локальна база)
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {scanMode === 'openai' && (
+                  <>
+                    <div className="settings-row" style={{ animation: 'slide-up-sheet 0.2s ease-out' }}>
+                      <span className="settings-label">Модель OpenAI:</span>
+                      <select
+                        className="settings-input settings-select"
+                        value={openAiModel}
+                        onChange={(e) => setOpenAiModel(e.target.value)}
+                      >
+                        <option value="gpt-5.5">GPT-5.5 (Точніше)</option>
+                        <option value="gpt-4.1-mini">GPT-4.1 Mini (Швидше)</option>
+                      </select>
+                    </div>
+
+                    <div className="settings-row" style={{ animation: 'slide-up-sheet 0.2s ease-out' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="settings-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Key size={14} /> OpenAI API Ключ:
+                        </span>
+                        <a
+                          href="https://platform.openai.com/api-keys"
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: '11px', color: 'var(--color-protein)', textDecoration: 'none' }}
+                        >
+                          Отримати ключ
+                        </a>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-input"
+                        placeholder="sk-..."
+                        value={openAiApiKey}
+                        onChange={(e) => setOpenAiApiKey(e.target.value)}
+                      />
+                      <span className="settings-info-text">
+                        OpenAI API-ключ зберігається локально у браузері на цьому пристрої. Для публічного продакшну краще підключити серверний proxy, щоб не вводити ключ у фронтенді.
+                      </span>
+                      {(!openAiApiKey || openAiApiKey.trim() === '') && (
+                        <div style={{
+                          marginTop: '8px',
+                          padding: '10px',
+                          borderRadius: '8px',
+                          background: 'rgba(245, 158, 11, 0.1)',
+                          border: '1px solid rgba(245, 158, 11, 0.2)',
+                          color: '#fbbf24',
+                          fontSize: '12px',
+                          lineHeight: '1.4'
+                        }}>
+                          <strong>Потрібен ключ:</strong> для GPT-сканування введіть OpenAI API-ключ або перемкніться на Gemini / локальну базу.
+                          <div style={{ marginTop: '8px' }}>
+                            <button
+                              type="button"
+                              style={{
+                                width: '100%',
+                                padding: '6px 12px',
+                                fontSize: '11px',
+                                background: 'rgba(255, 255, 255, 0.1)',
+                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                color: '#fff',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontWeight: '600',
+                                transition: 'all 0.2s'
+                              }}
+                              onClick={() => {
+                                setScanMode('mock');
+                                localStorage.setItem('nutrisnap_scanmode', 'mock');
+                                showToast("Режим сканування змінено на Симуляцію", "info");
                               }}
                             >
                               Перемкнути на Симуляцію (Локальна база)
