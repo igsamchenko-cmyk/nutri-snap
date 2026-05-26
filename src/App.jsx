@@ -1092,7 +1092,6 @@ export default function App() {
       if (!confirmed) return;
     }
 
-    const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
     const category = scannedMealCategory;
 
     const baselineWeight = Number(scanResult.weight) || 200;
@@ -1117,7 +1116,6 @@ export default function App() {
       originalCarbs: Number(scanResult.carbs),
       originalWeight: baselineWeight,
       category,
-      time: mealTimeStr,
       date: selectedDate,
       icon: getEmojiForCategory(category)
     };
@@ -1592,7 +1590,6 @@ export default function App() {
   const addBarcodeMealToDiary = () => {
     if (!barcodeResult) return;
 
-    const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
     const category = barcodeMealCategory;
 
     const baselineWeight = 100;
@@ -1617,7 +1614,6 @@ export default function App() {
       originalCarbs: Number(barcodeResult.carbs),
       originalWeight: baselineWeight,
       category,
-      time: mealTimeStr,
       date: selectedDate,
       icon: getEmojiForCategory(category)
     };
@@ -1645,8 +1641,6 @@ export default function App() {
   // --- Manual Search Helper Functions ---
   const addSearchMealToDiary = () => {
     if (!selectedSearchFood) return;
-    const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
-    
     const weightFactor = Number(searchFoodWeight) / Number(selectedSearchFood.weight);
     const finalCalories = Math.round(Number(selectedSearchFood.calories) * weightFactor);
     const finalProtein = Math.round(Number(selectedSearchFood.protein) * weightFactor * 10) / 10;
@@ -1667,7 +1661,6 @@ export default function App() {
       originalCarbs: Number(selectedSearchFood.carbs),
       originalWeight: Number(selectedSearchFood.weight),
       category: searchMealCategory,
-      time: mealTimeStr,
       date: selectedDate,
       icon: selectedSearchFood.icon || getEmojiForCategory(searchMealCategory)
     };
@@ -2302,8 +2295,8 @@ export default function App() {
                     return (
                       <svg 
                         viewBox="0 0 24 24" 
-                        width="28" 
-                        height="28" 
+                        width="40" 
+                        height="40" 
                         style={{ overflow: 'visible' }}
                         className="water-droplet-svg"
                       >
@@ -2351,6 +2344,12 @@ export default function App() {
                 <div>
                   <h3 className="water-title">Вода</h3>
                   <p className="water-progress">{currentWater} мл / 2000 мл</p>
+                  <div className="water-progress-track" aria-hidden="true">
+                    <div
+                      className="water-progress-fill"
+                      style={{ width: `${Math.min((currentWater / 2000) * 100, 100)}%` }}
+                    ></div>
+                  </div>
                 </div>
               </div>
               <div className="water-actions">
@@ -2401,7 +2400,6 @@ export default function App() {
                           className="btn-fav-add" 
                           onClick={() => {
                             const category = getDefaultCategory();
-                            const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
                             const newMeal = {
                               id: createMealId(),
                               name: fav.name,
@@ -2416,7 +2414,6 @@ export default function App() {
                               originalCarbs: Number(fav.carbs) || 0,
                               originalWeight: Number(fav.weight) || 100,
                               category,
-                              time: mealTimeStr,
                               date: selectedDate,
                               icon: getEmojiForCategory(category),
                               image: fav.image || ''
@@ -2512,7 +2509,6 @@ export default function App() {
                                 <div className="meal-text">
                                   <span className="meal-name" style={{ fontSize: '14px', fontWeight: 600 }}>{meal.name}</span>
                                   <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                                    <span>{meal.time} •</span>
                                     <input 
                                       type="number"
                                       value={meal.weight}
@@ -4170,7 +4166,6 @@ export default function App() {
                                 <div className="meal-text">
                                   <span className="meal-name" style={{ fontSize: '14px', fontWeight: 600 }}>{meal.name}</span>
                                   <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                                    <span>{meal.time} •</span>
                                     <input 
                                       type="number"
                                       value={meal.weight}
@@ -4677,7 +4672,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.4.4 (Mobile Layout Polish)</p>
+              <p>NutriSnap v1.4.5 (Dashboard Readability)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
