@@ -35,6 +35,7 @@ import {
   searchSmartProducts as searchSmartProductsWithGemini
 } from './services/geminiService';
 import {
+  SERVER_OPENAI_API_KEY,
   analyzeFoodImageWithOpenAI,
   detectBarcodeFromImageWithOpenAI,
   searchSmartProductsWithOpenAI
@@ -45,6 +46,7 @@ import { getProductByBarcode, searchProductsByName } from './services/openFoodFa
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
 const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
+const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' : '';
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -211,6 +213,13 @@ export default function App() {
       return '';
     }
   });
+  const [openAiProxyUrl, setOpenAiProxyUrl] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_openai_proxy_url') || DEFAULT_OPENAI_PROXY_URL;
+    } catch {
+      return DEFAULT_OPENAI_PROXY_URL;
+    }
+  });
   const [scanMode, setScanMode] = useState(() => {
     try {
       return localStorage.getItem('nutrisnap_scanmode') || (DEFAULT_API_KEY ? 'gemini' : 'mock');
@@ -232,6 +241,7 @@ export default function App() {
       return DEFAULT_OPENAI_MODEL;
     }
   });
+  const [updateRegistration, setUpdateRegistration] = useState(null);
 
   // --- Favorite Meals & Toast Notification States ---
   const [favorites, setFavorites] = useState(() => {
@@ -555,6 +565,10 @@ export default function App() {
   }, [openAiApiKey]);
 
   useEffect(() => {
+    localStorage.setItem('nutrisnap_openai_proxy_url', openAiProxyUrl.trim());
+  }, [openAiProxyUrl]);
+
+  useEffect(() => {
     localStorage.setItem('nutrisnap_scanmode', scanMode);
   }, [scanMode]);
 
@@ -575,6 +589,24 @@ export default function App() {
       bodyClass.remove('light-mode');
     }
   }, [theme]);
+
+  useEffect(() => {
+    const handleUpdateAvailable = (event) => {
+      setUpdateRegistration(event.detail?.registration || null);
+    };
+
+    window.addEventListener('nutrisnap-update-available', handleUpdateAvailable);
+    return () => window.removeEventListener('nutrisnap-update-available', handleUpdateAvailable);
+  }, []);
+
+  const applyAppUpdate = () => {
+    const waitingWorker = updateRegistration?.waiting;
+    if (waitingWorker) {
+      waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+    } else {
+      window.location.reload();
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem('nutrisnap_custom_barcodes', JSON.stringify(customBarcodes));
@@ -678,7 +710,7 @@ export default function App() {
       cancelled = true;
       clearTimeout(delayTimer);
     };
-  }, [searchQuery, activeTab, scannerMode, scanMode, apiKey, openAiApiKey, geminiModel, openAiModel]);
+  }, [searchQuery, activeTab, scannerMode, scanMode, apiKey, openAiApiKey, openAiProxyUrl, geminiModel, openAiModel]);
 
   // --- Camera Operations ---
   const startCamera = async () => {
@@ -779,11 +811,13 @@ export default function App() {
 
   const getCurrentAiConfig = () => {
     if (scanMode === 'openai') {
+      const proxyUrl = openAiProxyUrl.trim();
       return {
         provider: 'openai',
-        apiKey: openAiApiKey.trim(),
+        apiKey: proxyUrl ? SERVER_OPENAI_API_KEY : openAiApiKey.trim(),
         model: openAiModel,
-        displayName: 'OpenAI GPT'
+        displayName: 'OpenAI GPT',
+        proxyUrl
       };
     }
 
@@ -791,7 +825,8 @@ export default function App() {
       provider: 'gemini',
       apiKey: apiKey.trim(),
       model: geminiModel,
-      displayName: 'Gemini'
+      displayName: 'Gemini',
+      proxyUrl: ''
     };
   };
 
@@ -803,7 +838,7 @@ export default function App() {
     }
 
     if (config.provider === 'openai') {
-      return analyzeFoodImageWithOpenAI(imageDataBase64, config.apiKey, config.model);
+      return analyzeFoodImageWithOpenAI(imageDataBase64, config.apiKey, config.model, config.proxyUrl);
     }
 
     return analyzeFoodImageWithGemini(imageDataBase64, config.apiKey, config.model);
@@ -817,7 +852,7 @@ export default function App() {
     }
 
     if (config.provider === 'openai') {
-      return detectBarcodeFromImageWithOpenAI(imageDataBase64, config.apiKey, config.model);
+      return detectBarcodeFromImageWithOpenAI(imageDataBase64, config.apiKey, config.model, config.proxyUrl);
     }
 
     return detectBarcodeFromImageWithGemini(imageDataBase64, config.apiKey, config.model);
@@ -1586,7 +1621,7 @@ export default function App() {
 
     try {
       const results = aiConfig.provider === 'openai'
-        ? await searchSmartProductsWithOpenAI(cleanQuery, aiConfig.apiKey, aiConfig.model)
+        ? await searchSmartProductsWithOpenAI(cleanQuery, aiConfig.apiKey, aiConfig.model, aiConfig.proxyUrl)
         : await searchSmartProductsWithGemini(cleanQuery, aiConfig.apiKey, aiConfig.model);
       const formattedResults = (results || []).map(p => ({
         id: p.id || `ai-market-${createMealId()}`,
@@ -1882,6 +1917,7 @@ export default function App() {
         profile,
         apiKey: apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey,
         openAiApiKey,
+        openAiProxyUrl,
         scanMode,
         geminiModel,
         openAiModel,
@@ -1941,6 +1977,9 @@ export default function App() {
         }
         if (importedData.openAiApiKey !== undefined) {
           setOpenAiApiKey(String(importedData.openAiApiKey || '').trim());
+        }
+        if (importedData.openAiProxyUrl !== undefined) {
+          setOpenAiProxyUrl(String(importedData.openAiProxyUrl || '').trim());
         }
         if (importedData.scanMode !== undefined) {
           setScanMode(importedData.scanMode);
@@ -4362,10 +4401,18 @@ export default function App() {
                         value={openAiApiKey}
                         onChange={(e) => setOpenAiApiKey(e.target.value)}
                       />
+                      <input
+                        type="url"
+                        className="settings-input"
+                        placeholder="Proxy URL, наприклад https://your-worker.workers.dev/api/openai/responses"
+                        value={openAiProxyUrl}
+                        onChange={(e) => setOpenAiProxyUrl(e.target.value)}
+                        style={{ marginTop: '8px' }}
+                      />
                       <span className="settings-info-text">
-                        OpenAI API-ключ зберігається локально у браузері на цьому пристрої. Для публічного продакшну краще підключити серверний proxy, щоб не вводити ключ у фронтенді.
+                        Якщо вказати proxy endpoint, OpenAI API-ключ у браузері не потрібен. Без proxy ключ зберігається локально у браузері на цьому пристрої.
                       </span>
-                      {(!openAiApiKey || openAiApiKey.trim() === '') && (
+                      {(!openAiApiKey || openAiApiKey.trim() === '') && (!openAiProxyUrl || openAiProxyUrl.trim() === '') && (
                         <div style={{
                           marginTop: '8px',
                           padding: '10px',
@@ -4376,7 +4423,7 @@ export default function App() {
                           fontSize: '12px',
                           lineHeight: '1.4'
                         }}>
-                          <strong>Потрібен ключ:</strong> для GPT-сканування введіть OpenAI API-ключ або перемкніться на Gemini / локальну базу.
+                          <strong>Потрібен доступ:</strong> для GPT-сканування введіть OpenAI API-ключ або proxy endpoint.
                           <div style={{ marginTop: '8px' }}>
                             <button
                               type="button"
@@ -4448,7 +4495,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.3.2 (Mobile Nav Fix)</p>
+              <p>NutriSnap v1.4.0 (Proxy + Update Prompt)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
@@ -4782,6 +4829,19 @@ export default function App() {
       )}
 
       {/* Toast Notification Container */}
+      {updateRegistration && (
+        <div className="app-update-banner">
+          <div>
+            <strong>Доступна нова версія</strong>
+            <span> Оновіть NutriSnap, щоб отримати останні виправлення.</span>
+          </div>
+          <button type="button" onClick={applyAppUpdate}>
+            <RefreshCw size={14} />
+            Оновити
+          </button>
+        </div>
+      )}
+
       {toast && (
         <div className={`toast-notification toast-${toast.type}`}>
           <div className="toast-content">

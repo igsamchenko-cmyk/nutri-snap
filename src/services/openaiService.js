@@ -1,4 +1,5 @@
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+export const SERVER_OPENAI_API_KEY = '__nutrisnap_server_openai_key__';
 
 const FOOD_SCAN_SCHEMA = {
   type: 'object',
@@ -138,19 +139,28 @@ function handleOpenAIError(response, errorData) {
   return new Error(apiErrorMessage || `Помилка OpenAI API (код: ${response.status})`);
 }
 
-async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schema, maxOutputTokens = 1200) {
-  if (!apiKey) {
-    throw new Error('OpenAI API-ключ не налаштовано. Введіть ключ у налаштуваннях додатку.');
+async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schema, maxOutputTokens = 1200, proxyUrl = '') {
+  const useProxy = Boolean(proxyUrl?.trim()) || apiKey === SERVER_OPENAI_API_KEY;
+  const requestUrl = proxyUrl?.trim() || '/api/openai/responses';
+  const trimmedApiKey = apiKey?.trim() || '';
+
+  if (!useProxy && !trimmedApiKey) {
+    throw new Error('OpenAI API-ключ не налаштовано. Введіть ключ або proxy endpoint у налаштуваннях додатку.');
   }
 
   let response;
   try {
-    response = await fetch(OPENAI_RESPONSES_URL, {
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+
+    if (!useProxy) {
+      headers.Authorization = `Bearer ${trimmedApiKey}`;
+    }
+
+    response = await fetch(useProxy ? requestUrl : OPENAI_RESPONSES_URL, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey.trim()}`,
-        'Content-Type': 'application/json'
-      },
+      headers,
       body: JSON.stringify({
         model: modelName,
         input,
@@ -168,7 +178,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
     });
   } catch (error) {
     console.error('OpenAI network error:', error);
-    throw new Error('Не вдалося підключитися до OpenAI API. Якщо браузер блокує прямий запит з GitHub Pages, потрібен серверний proxy.');
+    throw new Error('Не вдалося підключитися до OpenAI API або proxy. Перевірте endpoint у налаштуваннях.');
   }
 
   if (!response.ok) {
@@ -191,7 +201,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
   }
 }
 
-export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-5.5') {
+export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-5.5', proxyUrl = '') {
   const promptText = `
     Проаналізуй фото їжі українською мовою.
 
@@ -216,13 +226,15 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
     ],
     apiKey,
     'food_scan_result',
-    FOOD_SCAN_SCHEMA
+    FOOD_SCAN_SCHEMA,
+    1200,
+    proxyUrl
   );
 
   return normalizeFoodResult(result);
 }
 
-export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-5.5') {
+export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-5.5', proxyUrl = '') {
   const promptText = `
     Знайди на фото штрих-код продукту (EAN-13, EAN-8, UPC-A або UPC-E).
     Поверни тільки цифри штрих-коду. Якщо штрих-код не видно або він нечіткий, поверни null.
@@ -242,13 +254,14 @@ export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, model
     apiKey,
     'barcode_scan_result',
     BARCODE_SCHEMA,
-    400
+    400,
+    proxyUrl
   );
 
   return result.barcode;
 }
 
-export async function searchSmartProductsWithOpenAI(query, apiKey, modelName = 'gpt-5.5') {
+export async function searchSmartProductsWithOpenAI(query, apiKey, modelName = 'gpt-5.5', proxyUrl = '') {
   if (!query || !query.trim()) {
     return [];
   }
@@ -268,7 +281,9 @@ export async function searchSmartProductsWithOpenAI(query, apiKey, modelName = '
     [{ role: 'user', content: [{ type: 'input_text', text: promptText }] }],
     apiKey,
     'smart_product_search',
-    SMART_SEARCH_SCHEMA
+    SMART_SEARCH_SCHEMA,
+    1200,
+    proxyUrl
   );
 
   return Array.isArray(result.products) ? result.products : [];

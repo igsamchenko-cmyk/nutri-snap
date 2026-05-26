@@ -9,9 +9,52 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       {
-        name: 'nutrisnap-gemini-proxy',
+        name: 'nutrisnap-ai-proxies',
         configureServer(server) {
           server.middlewares.use(async (req, res, next) => {
+            if (req.url?.startsWith('/api/openai/responses')) {
+              if (req.method !== 'POST') {
+                res.statusCode = 405
+                res.setHeader('Content-Type', 'application/json')
+                res.end(JSON.stringify({ error: { message: 'Method not allowed' } }))
+                return
+              }
+
+              if (!env.OPENAI_API_KEY) {
+                res.statusCode = 500
+                res.setHeader('Content-Type', 'application/json')
+                res.end(JSON.stringify({ error: { message: 'OPENAI_API_KEY is not configured' } }))
+                return
+              }
+
+              let body = ''
+              req.setEncoding('utf8')
+              req.on('data', chunk => {
+                body += chunk
+              })
+              req.on('end', async () => {
+                try {
+                  const openAiResponse = await fetch('https://api.openai.com/v1/responses', {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+                      'Content-Type': 'application/json'
+                    },
+                    body
+                  })
+                  const responseText = await openAiResponse.text()
+                  res.statusCode = openAiResponse.status
+                  res.setHeader('Content-Type', openAiResponse.headers.get('content-type') || 'application/json')
+                  res.end(responseText)
+                } catch {
+                  res.statusCode = 502
+                  res.setHeader('Content-Type', 'application/json')
+                  res.end(JSON.stringify({ error: { message: 'OpenAI proxy request failed' } }))
+                }
+              })
+              return
+            }
+
             if (!req.url?.startsWith('/api/gemini/')) {
               next()
               return
