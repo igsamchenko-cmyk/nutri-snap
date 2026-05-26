@@ -1,5 +1,6 @@
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 export const SERVER_OPENAI_API_KEY = '__nutrisnap_server_openai_key__';
+const DEFAULT_REASONING_EFFORT = 'low';
 
 const FOOD_SCAN_SCHEMA = {
   type: 'object',
@@ -104,6 +105,36 @@ function getOutputText(data) {
   return outputText || '';
 }
 
+function isReasoningModel(modelName = '') {
+  const normalizedModel = String(modelName).trim().toLowerCase();
+  return normalizedModel.startsWith('gpt-5') || /^o\d/.test(normalizedModel);
+}
+
+function buildResponseBody(modelName, input, schemaName, schema, maxOutputTokens) {
+  const reasoningModel = isReasoningModel(modelName);
+  const requestBody = {
+    model: modelName,
+    input,
+    max_output_tokens: reasoningModel ? Math.max(maxOutputTokens, 1600) : maxOutputTokens,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: schemaName,
+        strict: true,
+        schema
+      }
+    }
+  };
+
+  if (reasoningModel) {
+    requestBody.reasoning = { effort: DEFAULT_REASONING_EFFORT };
+  } else {
+    requestBody.temperature = 0.2;
+  }
+
+  return requestBody;
+}
+
 function normalizeFoodResult(result) {
   return {
     ...result,
@@ -161,20 +192,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
     response = await fetch(useProxy ? requestUrl : OPENAI_RESPONSES_URL, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model: modelName,
-        input,
-        max_output_tokens: maxOutputTokens,
-        temperature: 0.2,
-        text: {
-          format: {
-            type: 'json_schema',
-            name: schemaName,
-            strict: true,
-            schema
-          }
-        }
-      })
+      body: JSON.stringify(buildResponseBody(modelName, input, schemaName, schema, maxOutputTokens))
     });
   } catch (error) {
     console.error('OpenAI network error:', error);
