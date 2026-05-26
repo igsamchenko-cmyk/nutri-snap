@@ -193,7 +193,13 @@ export default function App() {
       return DEFAULT_API_KEY;
     }
   });
-  const [scanMode, setScanMode] = useState('gemini');
+  const [scanMode, setScanMode] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_scanmode') || (DEFAULT_API_KEY ? 'gemini' : 'mock');
+    } catch {
+      return DEFAULT_API_KEY ? 'gemini' : 'mock';
+    }
+  });
   const [geminiModel, setGeminiModel] = useState(() => {
     try {
       return localStorage.getItem('nutrisnap_geminimodel') || 'gemini-2.5-flash';
@@ -344,15 +350,6 @@ export default function App() {
     return streak;
   };
 
-  // Автоматичне налаштування режиму сканування
-  useEffect(() => {
-    try {
-      localStorage.setItem('nutrisnap_scanmode', 'gemini');
-      setScanMode('gemini');
-    } catch (e) {
-      console.error("Error auto-configuring API key:", e);
-    }
-  }, []);
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem('nutrisnap_theme') || 'dark';
@@ -372,6 +369,7 @@ export default function App() {
   const [scannedCarbs, setScannedCarbs] = useState(0);
   const [scannedCalories, setScannedCalories] = useState(0);
   const [cameraStream, setCameraStream] = useState(null);
+  const [cameraRequested, setCameraRequested] = useState(false);
 
   // Ghost click protection state
   const [allowCameraTrigger, setAllowCameraTrigger] = useState(false);
@@ -571,6 +569,7 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== 'scanner' || scannerMode === 'search') {
       stopCamera();
+      setCameraRequested(false);
       if (activeTab !== 'scanner') {
         // Очищуємо результати пошуку штрих-кодів, якщо виходимо зі сканера повністю
         setScanResult(null);
@@ -579,11 +578,13 @@ export default function App() {
         setBarcodeError(null);
         setBarcodeInput('');
       }
-    } else {
+    } else if (cameraRequested) {
       startCamera();
+    } else {
+      stopCamera();
     }
     return () => stopCamera();
-  }, [activeTab, scannerMode]);
+  }, [activeTab, scannerMode, cameraRequested]);
 
   // Дебоунс-пошук продуктів в українській базі Open Food Facts та автоматичний AI-пошук
   useEffect(() => {
@@ -654,6 +655,7 @@ export default function App() {
       setCameraError(
         "Ваш браузер не підтримує доступ до камери або з'єднання незахищене (потрібен HTTPS). Скористайтеся завантаженням фотографії."
       );
+      setCameraRequested(false);
       return;
     }
 
@@ -694,6 +696,7 @@ export default function App() {
           setCameraError(
             "Не вдалося отримати доступ до камери. Ви можете скористатися завантаженням фотографії з пристрою."
           );
+          setCameraRequested(false);
           return;
         }
       }
@@ -713,6 +716,7 @@ export default function App() {
     } catch (err) {
       console.error("Camera stream binding failed:", err);
       setCameraError("Не вдалося запустити відеопотік з камери.");
+      setCameraRequested(false);
     }
   };
 
@@ -2447,7 +2451,7 @@ export default function App() {
                         NutriSnap Фотосканер
                       </h3>
                       <p style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '280px', marginBottom: '24px', lineHeight: '1.6' }}>
-                        Сфотогравуйте страву на камеру телефону або оберіть зображення з галереї для миттєвого розрахунку калорій та КБЖВ.
+                        Увімкніть камеру або оберіть зображення з галереї для миттєвого розрахунку калорій та КБЖВ.
                       </p>
                       
                       {cameraError && (
@@ -2460,7 +2464,7 @@ export default function App() {
                         className="btn-primary" 
                         onClick={() => {
                           if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
-                            cameraFileInputRef.current?.click();
+                            setCameraRequested(true);
                           }
                         }}
                         style={{ 
@@ -2483,7 +2487,20 @@ export default function App() {
                         }}
                       >
                         <Camera size={20} />
-                        <span>Сфотогравувати їжу</span>
+                        <span>Увімкнути камеру</span>
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => {
+                          if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
+                            cameraFileInputRef.current?.click();
+                          }
+                        }}
+                        disabled={!allowCameraTrigger}
+                        style={{ width: '100%', maxWidth: '260px', marginTop: '10px', justifyContent: 'center' }}
+                      >
+                        <Upload size={18} />
+                        <span>Завантажити фото</span>
                       </button>
                       <input 
                         ref={cameraFileInputRef}
@@ -2717,7 +2734,7 @@ export default function App() {
                         NutriSnap Сканер штрих-кодів
                       </h3>
                       <p style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '280px', marginBottom: '24px', lineHeight: '1.6' }}>
-                        Сфотогравуйте штрих-код продукту або завантажте його з галереї для автоматичного розпізнавання продукту.
+                        Увімкніть камеру або завантажте фото штрих-коду для автоматичного розпізнавання продукту.
                       </p>
                       
                       {cameraError && (
@@ -2730,7 +2747,7 @@ export default function App() {
                         className="btn-primary" 
                         onClick={() => {
                           if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
-                            barcodeFileInputRef.current?.click();
+                            setCameraRequested(true);
                           }
                         }}
                         style={{ 
@@ -2753,7 +2770,20 @@ export default function App() {
                         }}
                       >
                         <Camera size={20} />
-                        <span>Сфотогравувати штрих-код</span>
+                        <span>Увімкнути камеру</span>
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => {
+                          if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
+                            barcodeFileInputRef.current?.click();
+                          }
+                        }}
+                        disabled={!allowCameraTrigger}
+                        style={{ width: '100%', maxWidth: '260px', marginTop: '10px', justifyContent: 'center' }}
+                      >
+                        <Upload size={18} />
+                        <span>Завантажити фото</span>
                       </button>
                       <input 
                         ref={barcodeFileInputRef}
@@ -4150,7 +4180,7 @@ export default function App() {
                         onChange={(e) => setApiKey(e.target.value.trim() ? e.target.value : DEFAULT_API_KEY)}
                       />
                       <span className="settings-info-text">
-                        Ваш API-ключ зберігається локально на вашому пристрої у безпечному сховищі браузера та надсилається лише напряму до Google API.
+                        Ваш API-ключ зберігається локально у браузері на цьому пристрої та надсилається лише напряму до Google API. Не вводьте ключ на спільних пристроях.
                       </span>
                       {(!apiKey || apiKey.trim() === '') && (
                         <div style={{
