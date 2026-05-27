@@ -91,6 +91,37 @@ const hasFilledNutritionInputs = (...values) => (
   values.every(value => String(value ?? '').trim() !== '' && Number.isFinite(Number(value)))
 );
 
+const findBestFoodMatchByName = (foodName, foods) => {
+  const query = normalizeSearchText(foodName);
+  const tokens = query.split(/\s+/).filter(token => token.length >= 2);
+  if (!query || tokens.length === 0) return null;
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  foods.forEach((food, index) => {
+    if (!hasCompleteNutritionValues(food)) return;
+
+    const name = normalizeSearchText(food.name);
+    const text = getFoodSearchText(food);
+    if (!tokens.every(token => text.includes(token))) return;
+
+    let score = 40;
+    if (name === query) score += 60;
+    else if (name.startsWith(query) || query.startsWith(name)) score += 35;
+    if (food.isCustom || food.isCustomBarcode || food.source === "manual" || food.dataQuality === "manual") score += 20;
+    if (food.source === "ua-core") score += 12;
+    score -= index * 0.01;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = food;
+    }
+  });
+
+  return bestScore >= 45 ? bestMatch : null;
+};
+
 const parseCsvText = (text) => {
   const rows = [];
   let row = [];
@@ -812,13 +843,6 @@ export default function App() {
 
     const delayTimer = setTimeout(async () => {
       try {
-        // Якщо є введений API-ключ ШІ, запускаємо розумний пошук паралельно з OFF,
-        // щоб одразу отримувати сорти та варіації (яблуко Голден, Гала тощо)
-        const aiConfig = getCurrentAiConfig();
-        if (scanMode !== 'mock' && aiConfig.apiKey) {
-          triggerAISmartSearch(cleanQuery);
-        }
-
         if (cachedExternal && Date.now() - cachedExternal.cachedAt < SEARCH_CACHE_TTL_MS) {
           return;
         }
@@ -1047,23 +1071,44 @@ export default function App() {
       }
 
       const result = await analyzeFoodWithCurrentProvider(imageDataBase64);
+      const localNutritionMatch = findBestFoodMatchByName(result.name, [
+        ...Object.values(customBarcodes).map(food => ({ ...food, isCustomBarcode: true })),
+        ...customFoods.map(food => ({ ...food, isCustom: true })),
+        ...productCatalog,
+        ...mockFoods
+      ]);
 
-      if (result.needsManualNutrition || result.dataQuality === "insufficient" || !hasCompleteNutritionValues(result)) {
-        throw new Error(result.warning || "Не вдалося надійно визначити КБЖВ з фото. Щоб не показувати неправильні дані, введіть значення з етикетки вручну.");
+      const scanData = localNutritionMatch ? {
+        ...result,
+        name: localNutritionMatch.name,
+        calories: Number(localNutritionMatch.calories),
+        protein: Number(localNutritionMatch.protein),
+        fat: Number(localNutritionMatch.fat),
+        carbs: Number(localNutritionMatch.carbs),
+        weight: Number(localNutritionMatch.weight) || 100,
+        ingredients: localNutritionMatch.ingredients || result.ingredients || '',
+        dataQuality: "database_match",
+        needsManualNutrition: false,
+        confidence: Math.max(Number(result.confidence) || 0, 85),
+        warning: `КБЖВ взято з локальної бази: ${localNutritionMatch.brand || localNutritionMatch.sourceLabel || "продукт"}. Перевірте вагу перед додаванням.`
+      } : result;
+
+      if (scanData.needsManualNutrition || scanData.dataQuality === "insufficient" || !hasCompleteNutritionValues(scanData)) {
+        throw new Error(scanData.warning || "Не вдалося надійно визначити КБЖВ з фото. Щоб не показувати неправильні дані, введіть значення з етикетки вручну.");
       }
 
       const verifiedResult = {
-        ...result,
-        dataQuality: result.dataQuality || "estimate",
-        warning: result.warning || "КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням."
+        ...scanData,
+        dataQuality: scanData.dataQuality || "estimate",
+        warning: scanData.warning || "КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням."
       };
 
       setScanResult(verifiedResult);
-      setEditedWeight(Number(result.weight) || 200);
-      setScannedProtein(Number(result.protein) || 0);
-      setScannedFat(Number(result.fat) || 0);
-      setScannedCarbs(Number(result.carbs) || 0);
-      setScannedCalories(Number(result.calories) || 0);
+      setEditedWeight(Number(verifiedResult.weight) || 200);
+      setScannedProtein(Number(verifiedResult.protein) || 0);
+      setScannedFat(Number(verifiedResult.fat) || 0);
+      setScannedCarbs(Number(verifiedResult.carbs) || 0);
+      setScannedCalories(Number(verifiedResult.calories) || 0);
     } catch (err) {
       console.error(err);
       openCustomFoodForm({ weight: 100 });
@@ -1083,14 +1128,18 @@ export default function App() {
     if (!videoRef.current) return;
     
     const video = videoRef.current;
+    const sourceWidth = video.videoWidth || 640;
+    const sourceHeight = video.videoHeight || 480;
+    const maxSide = 960;
+    const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = Math.round(sourceWidth * scale);
+    canvas.height = Math.round(sourceHeight * scale);
     
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const base64Data = canvas.toDataURL('image/jpeg', 0.7);
+    const base64Data = canvas.toDataURL('image/jpeg', 0.62);
     triggerScan(base64Data);
   };
 
@@ -1219,7 +1268,7 @@ export default function App() {
   const addScannedMealToDiary = () => {
     if (!scanResult) return;
 
-    if (scanResult.dataQuality !== "label_read") {
+    if (scanResult.dataQuality !== "label_read" && scanResult.dataQuality !== "database_match") {
       const confirmed = window.confirm("Це приблизна оцінка ШІ, а не точні дані з етикетки. Додати її до щоденника?");
       if (!confirmed) return;
     }
@@ -1873,8 +1922,6 @@ export default function App() {
 
   // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
   const combinedFoods = useMemo(() => [
-    ...productCatalog,
-    ...mockFoods,
     ...customFoods.map(f => ({ 
       ...f, 
       isCustom: true, 
@@ -1888,7 +1935,9 @@ export default function App() {
       id: f.id || `barcode-${f.barcode}`,
       brand: f.brand || "Штрих-код",
       icon: "🏷️"
-    }))
+    })),
+    ...productCatalog,
+    ...mockFoods
   ], [customFoods, customBarcodes]);
 
   const indexedCombinedFoods = useMemo(() => (
@@ -3056,7 +3105,9 @@ export default function App() {
                           <span className="match-badge">
                             {scanResult.dataQuality === "label_read"
                               ? "КБЖВ зчитано з етикетки"
-                              : `Оцінка ШІ: ${scanResult.confidence || 0}% впевненості`}
+                              : scanResult.dataQuality === "database_match"
+                                ? "КБЖВ з локальної бази"
+                                : `Оцінка ШІ: ${scanResult.confidence || 0}% впевненості`}
                           </span>
                           <h2 className="dish-title">{scanResult.name}</h2>
                         </div>
@@ -5009,7 +5060,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.4.8 (Core Food Database)</p>
+              <p>NutriSnap v1.4.9 (Reliable Search & Scan)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
