@@ -1094,6 +1094,16 @@ export default function App() {
       } : result;
 
       if (scanData.needsManualNutrition || scanData.dataQuality === "insufficient" || !hasCompleteNutritionValues(scanData)) {
+        const fallbackSearchName = String(result?.name || scanData?.name || '').trim();
+        if (fallbackSearchName) {
+          setSearchQuery(fallbackSearchName);
+          setSelectedCategoryFilter('Усі');
+          setScannerMode('search');
+          setCameraRequested(false);
+          stopCamera();
+          showToast(`Камера впізнала "${fallbackSearchName}", але КБЖВ ненадійні. Показую схожі продукти з бази.`, "info");
+          return;
+        }
         throw new Error(scanData.warning || "Не вдалося надійно визначити КБЖВ з фото. Щоб не показувати неправильні дані, введіть значення з етикетки вручну.");
       }
 
@@ -1956,6 +1966,9 @@ export default function App() {
     if (!matchesQuery) return false;
 
     if (selectedCategoryFilter === 'Усі') return true;
+    if (selectedCategoryFilter === 'Моя база') {
+      return Boolean(food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual');
+    }
     if (selectedCategoryFilter === 'Супермаркети') {
       if (food.supermarket || food.source === 'ua-seed') return true;
       const isSupermarket = food.brand && (
@@ -3783,7 +3796,7 @@ export default function App() {
 
                 {/* Filter Chips */}
                 <div className="filter-chips-container">
-                  {['Усі', 'Супермаркети', 'Страви', 'Обрані', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
+                  {['Усі', 'Моя база', 'Супермаркети', 'Страви', 'Обрані', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
                     <button
                       key={filter}
                       className={`filter-chip ${selectedCategoryFilter === filter ? 'active' : ''}`}
@@ -5060,7 +5073,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.4.9 (Reliable Search & Scan)</p>
+              <p>NutriSnap v1.5.0 (Smart Scan Fallback)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
