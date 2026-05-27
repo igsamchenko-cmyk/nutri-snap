@@ -1795,6 +1795,18 @@ body.light-mode .weight-input {
   color: #86efac;
 }
 
+.quick-portion-chip.preferred {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.14);
+  color: #93c5fd;
+}
+
+.quick-portion-chip.preferred.active {
+  border-color: rgba(16, 185, 129, 0.5);
+  background: rgba(16, 185, 129, 0.18);
+  color: #86efac;
+}
+
 body.light-mode .quick-portion-chip {
   border-color: var(--border-light);
   background: rgba(15, 23, 42, 0.05);
@@ -1803,6 +1815,18 @@ body.light-mode .quick-portion-chip {
 
 body.light-mode .quick-portion-chip:hover,
 body.light-mode .quick-portion-chip.active {
+  border-color: rgba(5, 150, 105, 0.4);
+  background: rgba(5, 150, 105, 0.12);
+  color: #047857;
+}
+
+body.light-mode .quick-portion-chip.preferred {
+  border-color: rgba(37, 99, 235, 0.32);
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+}
+
+body.light-mode .quick-portion-chip.preferred.active {
   border-color: rgba(5, 150, 105, 0.4);
   background: rgba(5, 150, 105, 0.12);
   color: #047857;

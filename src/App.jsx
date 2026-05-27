@@ -91,17 +91,26 @@ const hasFilledNutritionInputs = (...values) => (
   values.every(value => String(value ?? '').trim() !== '' && Number.isFinite(Number(value)))
 );
 
-const getQuickPortionPresets = (baseWeight = 100, name = '') => {
+const getFoodPortionKey = (food) => {
+  if (!food) return '';
+  if (food.barcode) return `barcode:${String(food.barcode).trim()}`;
+  if (food.id) return `id:${String(food.id).trim()}`;
+  return `name:${normalizeSearchText([food.name, food.brand].filter(Boolean).join(' '))}`;
+};
+
+const getQuickPortionPresets = (baseWeight = 100, name = '', preferredWeight = null) => {
   const normalizedName = normalizeSearchText(name);
   const presets = new Map();
 
-  const addPreset = (label, value, preferLabel = false) => {
+  const addPreset = (label, value, options = {}) => {
+    const { preferLabel = false, isPreferred = false } = options;
     const numericValue = Math.round(Number(value));
     if (!numericValue || numericValue < 1 || numericValue > 5000) return;
     if (presets.has(numericValue) && !preferLabel) return;
-    presets.set(numericValue, { label, value: numericValue });
+    presets.set(numericValue, { label, value: numericValue, isPreferred });
   };
 
+  addPreset('Звично', preferredWeight, { preferLabel: true, isPreferred: true });
   [50, 100, 150, 200].forEach(value => addPreset(`${value} г`, value));
 
   const numericBaseWeight = Math.round(Number(baseWeight) || 100);
@@ -114,15 +123,17 @@ const getQuickPortionPresets = (baseWeight = 100, name = '') => {
       `${numericBaseWeight} г`
     );
 
-    addPreset(servingLabel, numericBaseWeight, true);
+    addPreset(servingLabel, numericBaseWeight, { preferLabel: true });
     addPreset('2 порції', numericBaseWeight * 2);
   }
+
+  addPreset('Звично', preferredWeight, { preferLabel: true, isPreferred: true });
 
   return Array.from(presets.values()).slice(0, 6);
 };
 
-const QuickPortionButtons = ({ baseWeight, name, currentWeight, onSelect }) => {
-  const presets = getQuickPortionPresets(baseWeight, name);
+const QuickPortionButtons = ({ baseWeight, name, currentWeight, preferredWeight, onSelect }) => {
+  const presets = getQuickPortionPresets(baseWeight, name, preferredWeight);
   const currentNumericWeight = Math.round(Number(currentWeight) || 0);
 
   return (
@@ -131,7 +142,7 @@ const QuickPortionButtons = ({ baseWeight, name, currentWeight, onSelect }) => {
         <button
           key={`${preset.label}-${preset.value}`}
           type="button"
-          className={`quick-portion-chip ${currentNumericWeight === preset.value ? 'active' : ''}`}
+          className={`quick-portion-chip ${preset.isPreferred ? 'preferred' : ''} ${currentNumericWeight === preset.value ? 'active' : ''}`}
           onClick={() => onSelect(preset.value)}
         >
           {preset.label}
@@ -658,6 +669,16 @@ export default function App() {
     }
   });
 
+  const [rememberedFoodPortions, setRememberedFoodPortions] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nutrisnap_food_portions');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      console.error("Failed to load remembered portions:", e);
+      return {};
+    }
+  });
+
   const [isCustomFoodModalOpen, setIsCustomFoodModalOpen] = useState(false);
   const [customFoodName, setCustomFoodName] = useState('');
   const [customFoodCalories, setCustomFoodCalories] = useState('');
@@ -830,6 +851,37 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('nutrisnap_custom_foods', JSON.stringify(customFoods));
   }, [customFoods]);
+
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_food_portions', JSON.stringify(rememberedFoodPortions));
+  }, [rememberedFoodPortions]);
+
+  const getRememberedFoodPortion = (food) => {
+    const key = getFoodPortionKey(food);
+    const rememberedWeight = Number(rememberedFoodPortions[key]);
+    return rememberedWeight > 0 && rememberedWeight <= 5000 ? rememberedWeight : null;
+  };
+
+  const getPreferredFoodWeight = (food, fallbackWeight = 100) => {
+    const fallback = Number(fallbackWeight || food?.weight || 100);
+    return getRememberedFoodPortion(food) || (fallback > 0 ? fallback : 100);
+  };
+
+  const rememberFoodPortion = (food, weight) => {
+    const key = getFoodPortionKey(food);
+    const numericWeight = Math.round(Number(weight));
+    if (!key || !numericWeight || numericWeight < 1 || numericWeight > 5000) return;
+
+    setRememberedFoodPortions(prev => {
+      if (Number(prev[key]) === numericWeight) return prev;
+      return { ...prev, [key]: numericWeight };
+    });
+  };
+
+  const selectSearchFood = (food) => {
+    setSelectedSearchFood(food);
+    setSearchFoodWeight(getPreferredFoodWeight(food, food?.weight));
+  };
 
   // Захист від фантомних натискань (ghost click protection) при відкритті сканера або зміні режимів
   useEffect(() => {
@@ -1361,6 +1413,7 @@ export default function App() {
       icon: getEmojiForCategory(category)
     };
 
+    rememberFoodPortion(scanResult, finalWeight);
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     
@@ -1411,7 +1464,7 @@ export default function App() {
     setBarcodeCandidateProduct(null);
     setBarcodeNotFound(null);
     setBarcodeResult(product);
-    const w = product.weight || 100;
+    const w = getPreferredFoodWeight(product, product.weight || 100);
     setBarcodeEditedWeight(w);
     const scale = w / 100;
     setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
@@ -1561,6 +1614,7 @@ export default function App() {
       }));
       setSelectedSearchFood(prev => prev?.isCustomBarcode && prev.barcode === barcode ? { ...updatedProduct, isCustomBarcode: true } : prev);
       setBarcodeResult(prev => prev?.barcode === barcode ? updatedProduct : prev);
+      rememberFoodPortion(updatedProduct, defaultWeightVal);
       showToast(`"${updatedProduct.name}" оновлено у вашій базі.`, "success");
       closeCustomFoodModal();
       resetCustomFoodForm();
@@ -1578,6 +1632,7 @@ export default function App() {
         food.id === customFoodEditTarget.id ? { ...food, ...updatedFood } : food
       )));
       setSelectedSearchFood(prev => prev?.isCustom && prev.id === customFoodEditTarget.id ? { ...updatedFood, isCustom: true } : prev);
+      rememberFoodPortion(updatedFood, defaultWeightVal);
       showToast(`"${updatedFood.name}" оновлено у вашій базі.`, "success");
       closeCustomFoodModal();
       resetCustomFoodForm();
@@ -1591,6 +1646,7 @@ export default function App() {
     };
 
     setCustomFoods(prev => [newFood, ...prev]);
+    rememberFoodPortion(newFood, defaultWeightVal);
 
     closeCustomFoodModal();
     resetCustomFoodForm();
@@ -1643,6 +1699,7 @@ export default function App() {
       ...prev,
       [barcodeNotFound]: newProduct
     }));
+    rememberFoodPortion(newProduct, defaultWeightVal);
 
     setFallbackName('');
     setFallbackCalories('');
@@ -1859,6 +1916,7 @@ export default function App() {
       icon: getEmojiForCategory(category)
     };
 
+    rememberFoodPortion(barcodeResult, finalWeight);
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     showToast(`Продукт "${barcodeResult.name}" додано до щоденника!`, "success");
@@ -1906,6 +1964,7 @@ export default function App() {
       icon: selectedSearchFood.icon || getEmojiForCategory(searchMealCategory)
     };
 
+    rememberFoodPortion(selectedSearchFood, Number(searchFoodWeight));
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     showToast(`"${selectedSearchFood.name}" додано до щоденника!`, "success");
@@ -2306,6 +2365,7 @@ export default function App() {
         profile,
         customFoods,
         customBarcodes,
+        rememberedFoodPortions,
         apiKey: apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey,
         openAiApiKey,
         openAiProxyUrl,
@@ -2367,6 +2427,9 @@ export default function App() {
         }
         if (importedData.customBarcodes && typeof importedData.customBarcodes === 'object') {
           setCustomBarcodes(importedData.customBarcodes);
+        }
+        if (importedData.rememberedFoodPortions && typeof importedData.rememberedFoodPortions === 'object') {
+          setRememberedFoodPortions(importedData.rememberedFoodPortions);
         }
         if (importedData.apiKey !== undefined) {
           const importedApiKey = String(importedData.apiKey || '').trim();
@@ -3329,6 +3392,7 @@ export default function App() {
                         baseWeight={scanResult.weight || editedWeight}
                         name={scanResult.name}
                         currentWeight={editedWeight}
+                        preferredWeight={getRememberedFoodPortion(scanResult)}
                         onSelect={handleScanWeightChange}
                       />
 
@@ -3630,6 +3694,7 @@ export default function App() {
                         baseWeight={barcodeResult.weight || 100}
                         name={barcodeResult.name}
                         currentWeight={barcodeEditedWeight}
+                        preferredWeight={getRememberedFoodPortion(barcodeResult)}
                         onSelect={handleBarcodeWeightChange}
                       />
 
@@ -3832,8 +3897,7 @@ export default function App() {
                             key={food.id}
                             className="autocomplete-item"
                             onClick={() => {
-                              setSelectedSearchFood(food);
-                              setSearchFoodWeight(food.weight); // default to its base weight
+                              selectSearchFood(food);
                               setSearchQuery(''); // clear query so dropdown disappears
                               setShowSuggestions(false);
                             }}
@@ -3962,8 +4026,7 @@ export default function App() {
                           key={food.id}
                           className="search-food-item"
                           onClick={() => {
-                            setSelectedSearchFood(food);
-                            setSearchFoodWeight(food.weight);
+                            selectSearchFood(food);
                           }}
                         >
                           <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🥗'}</span>
@@ -4221,6 +4284,7 @@ export default function App() {
                             baseWeight={selectedSearchFood.weight || 100}
                             name={selectedSearchFood.name}
                             currentWeight={searchFoodWeight}
+                            preferredWeight={getRememberedFoodPortion(selectedSearchFood)}
                             onSelect={setSearchFoodWeight}
                           />
 
@@ -5195,7 +5259,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.5.2 (Quick Portions)</p>
+              <p>NutriSnap v1.5.3 (Smart Portions)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
