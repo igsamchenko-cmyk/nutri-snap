@@ -5009,7 +5009,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.4.7 (Product Database Import)</p>
+              <p>NutriSnap v1.4.8 (Core Food Database)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
