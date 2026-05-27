@@ -2923,6 +2923,137 @@ body.light-mode .search-brand-badge {
   border: 1px solid transparent;
 }
 
+.database-manager-card {
+  overflow: hidden;
+}
+
+.database-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.database-stat-tile {
+  min-width: 0;
+  padding: 10px 8px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.database-stat-tile span {
+  color: var(--text-dark-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.database-stat-tile strong {
+  color: var(--text-dark-primary);
+  font-size: 20px;
+  line-height: 1.05;
+  font-weight: 800;
+}
+
+.database-source-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.database-source-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--text-dark-secondary);
+  font-size: 12px;
+}
+
+.database-source-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.database-source-row strong {
+  color: var(--color-calories);
+  font-size: 13px;
+}
+
+.database-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.database-action-btn {
+  min-height: 42px;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dark-primary);
+  font-size: 12px;
+  font-weight: 750;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.database-action-btn.primary {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(16, 185, 129, 0.24);
+  color: #6ee7b7;
+}
+
+body.light-mode .database-stat-tile {
+  background: rgba(15, 23, 42, 0.035);
+  border-color: rgba(15, 23, 42, 0.06);
+}
+
+body.light-mode .database-stat-tile span,
+body.light-mode .database-source-row {
+  color: var(--text-light-secondary);
+}
+
+body.light-mode .database-stat-tile strong,
+body.light-mode .database-action-btn {
+  color: var(--text-light-primary);
+}
+
+body.light-mode .database-source-row {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+body.light-mode .database-action-btn {
+  background: rgba(15, 23, 42, 0.035);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+@media (max-width: 390px) {
+  .database-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .database-action-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Supermarket specific badges */
 .search-brand-badge.supermarket-atb {
   background: rgba(30, 64, 175, 0.3);

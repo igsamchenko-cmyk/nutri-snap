@@ -51,6 +51,21 @@ const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' :
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const PRODUCT_IMPORT_FIELDS = {
+  name: ["name", "назва", "продукт", "title"],
+  brand: ["brand", "бренд", "виробник"],
+  supermarket: ["supermarket", "магазин", "мережа"],
+  category: ["category", "категорія"],
+  calories: ["calories", "kcal", "ккал", "калорії"],
+  protein: ["protein", "білки"],
+  fat: ["fat", "жири"],
+  carbs: ["carbs", "вуглеводи"],
+  weight: ["weight", "вага", "порція"],
+  barcode: ["barcode", "штрихкод", "штрих-код"],
+  aliases: ["aliases", "синоніми"],
+  ingredients: ["ingredients", "склад"],
+  icon: ["icon", "emoji"]
+};
 
 const normalizeSearchText = (value = '') =>
   String(value)
@@ -75,6 +90,123 @@ const hasCompleteNutritionValues = (item) => (
 const hasFilledNutritionInputs = (...values) => (
   values.every(value => String(value ?? '').trim() !== '' && Number.isFinite(Number(value)))
 );
+
+const parseCsvText = (text) => {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      i += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") i += 1;
+      row.push(cell);
+      if (row.some(value => value.trim())) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  if (row.some(value => value.trim())) rows.push(row);
+  return rows;
+};
+
+const normalizeImportHeader = (value = "") => String(value).replace(/^\uFEFF/, "").trim().toLowerCase().replace(/\s+/g, " ");
+
+const getImportField = (row, field) => {
+  const aliases = PRODUCT_IMPORT_FIELDS[field] || [field];
+  for (const alias of aliases) {
+    const value = row[normalizeImportHeader(alias)];
+    if (value !== undefined && String(value).trim() !== "") return value;
+  }
+  return "";
+};
+
+const numberFromImport = (value, fallback = 0) => {
+  if (value === "" || value === null || value === undefined) return fallback;
+  const parsed = Number(String(value).replace(",", ".").trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const aliasesFromImport = (value) => String(value || "")
+  .split(/[;|]/)
+  .map(item => item.trim())
+  .filter(Boolean);
+
+const rowsFromProductImport = (text, fileName = "") => {
+  if (fileName.toLowerCase().endsWith(".json")) {
+    const data = JSON.parse(text);
+    const products = Array.isArray(data) ? data : [...(data.customFoods || []), ...Object.values(data.customBarcodes || {})];
+    return products.map(item => {
+      const row = {};
+      Object.entries(item || {}).forEach(([key, value]) => {
+        row[normalizeImportHeader(key)] = Array.isArray(value) ? value.join(";") : String(value ?? "");
+      });
+      return row;
+    });
+  }
+
+  const [headers, ...rows] = parseCsvText(text);
+  if (!headers?.length) return [];
+  const normalizedHeaders = headers.map(normalizeImportHeader);
+  return rows.map(values => {
+    const row = {};
+    normalizedHeaders.forEach((header, index) => {
+      row[header] = String(values[index] || "").trim();
+    });
+    return row;
+  });
+};
+
+const normalizeImportedProduct = (row, index) => {
+  const name = String(getImportField(row, "name") || "").trim();
+  if (!name) return null;
+
+  const baseWeight = Math.max(1, Math.round(numberFromImport(getImportField(row, "weight"), 100)));
+  const scaleTo100 = 100 / baseWeight;
+  const now = new Date().toISOString();
+  const barcode = String(getImportField(row, "barcode") || "").replace(/\D/g, "");
+  const brand = String(getImportField(row, "brand") || "").trim();
+  const supermarket = String(getImportField(row, "supermarket") || "").trim();
+  const aliases = aliasesFromImport(getImportField(row, "aliases"));
+
+  return {
+    id: barcode || `imported-${Date.now()}-${index}`,
+    barcode,
+    name,
+    brand: brand || "Моя база",
+    supermarket,
+    category: String(getImportField(row, "category") || "Інше").trim(),
+    calories: Math.round(numberFromImport(getImportField(row, "calories")) * scaleTo100),
+    protein: Math.round(numberFromImport(getImportField(row, "protein")) * scaleTo100 * 10) / 10,
+    fat: Math.round(numberFromImport(getImportField(row, "fat")) * scaleTo100 * 10) / 10,
+    carbs: Math.round(numberFromImport(getImportField(row, "carbs")) * scaleTo100 * 10) / 10,
+    weight: 100,
+    icon: String(getImportField(row, "icon") || "🏷️").trim(),
+    aliases,
+    ingredients: String(getImportField(row, "ingredients") || "").trim(),
+    source: barcode ? "manual-barcode-import" : "manual-import",
+    sourceLabel: barcode ? "Мій штрих-код" : "Моя база",
+    dataQuality: "manual",
+    searchText: [name, brand, supermarket, barcode, aliases.join(" "), "моя база імпорт"].filter(Boolean).join(" ").toLowerCase(),
+    createdAt: now,
+    updatedAt: now
+  };
+};
 
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
@@ -1834,6 +1966,27 @@ export default function App() {
       .filter(food => searchTokens.every(token => food.searchIndexText.includes(token)))
       .slice(0, MAX_SEARCH_SUGGESTIONS);
   }, [indexedCombinedFoods, searchTokens, showSuggestions]);
+
+  const databaseStats = useMemo(() => {
+    const sourceCounts = productCatalog.reduce((acc, food) => {
+      const source = food.sourceLabel || food.source || food.supermarket || food.brand || "Каталог";
+      acc[source] = (acc[source] || 0) + 1;
+      return acc;
+    }, {});
+
+    const verifiedCustomFoods = customFoods.filter(hasCompleteNutritionValues).length;
+    const verifiedBarcodes = Object.values(customBarcodes).filter(hasCompleteNutritionValues).length;
+
+    return {
+      catalog: productCatalog.length,
+      demo: mockFoods.length,
+      custom: customFoods.length,
+      customBarcodes: Object.keys(customBarcodes).length,
+      verifiedCustom: verifiedCustomFoods + verifiedBarcodes,
+      total: productCatalog.length + mockFoods.length + customFoods.length + Object.keys(customBarcodes).length,
+      topSources: Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 4)
+    };
+  }, [customFoods, customBarcodes]);
   // Оновлення ваги страви з пропорційним перерахунком КБЖВ
   const handleUpdateMealWeight = (mealId, value) => {
     setMeals(prevMeals => prevMeals.map(meal => {
@@ -2091,6 +2244,98 @@ export default function App() {
   };
 
   // Розрахунок прогресу для SVG
+  const importProductDatabase = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (readerEvent) => {
+      try {
+        const rows = rowsFromProductImport(String(readerEvent.target.result || ""), file.name);
+        const importedProducts = rows
+          .map((row, index) => normalizeImportedProduct(row, index))
+          .filter(product => product && hasCompleteNutritionValues(product));
+
+        if (importedProducts.length === 0) {
+          throw new Error("У файлі немає продуктів з назвою та повними КБЖВ.");
+        }
+
+        const productsWithoutBarcode = importedProducts.filter(product => !product.barcode);
+        const productsWithBarcode = importedProducts.filter(product => product.barcode);
+        const existingFoodMap = new Map(customFoods.map(food => [normalizeSearchText(`${food.name} ${food.brand}`), food]));
+        const nextCustomFoods = [...customFoods];
+        let addedFoods = 0;
+        let updatedFoods = 0;
+
+        productsWithoutBarcode.forEach(product => {
+          const key = normalizeSearchText(`${product.name} ${product.brand}`);
+          const existing = existingFoodMap.get(key);
+          if (existing) {
+            const index = nextCustomFoods.findIndex(food => food.id === existing.id);
+            nextCustomFoods[index] = {
+              ...existing,
+              ...product,
+              id: existing.id,
+              createdAt: existing.createdAt || product.createdAt
+            };
+            updatedFoods += 1;
+          } else {
+            const newFood = {
+              ...product,
+              id: `custom-import-${Date.now()}-${addedFoods}`
+            };
+            nextCustomFoods.unshift(newFood);
+            existingFoodMap.set(key, newFood);
+            addedFoods += 1;
+          }
+        });
+
+        const nextCustomBarcodes = { ...customBarcodes };
+        let addedBarcodes = 0;
+        let updatedBarcodes = 0;
+
+        productsWithBarcode.forEach(product => {
+          const existing = nextCustomBarcodes[product.barcode];
+          nextCustomBarcodes[product.barcode] = {
+            ...existing,
+            ...product,
+            id: existing?.id || `barcode-${product.barcode}`,
+            createdAt: existing?.createdAt || product.createdAt
+          };
+          if (existing) updatedBarcodes += 1;
+          else addedBarcodes += 1;
+        });
+
+        setCustomFoods(nextCustomFoods);
+        setCustomBarcodes(nextCustomBarcodes);
+        showToast(`Імпортовано ${addedFoods + addedBarcodes} нових, оновлено ${updatedFoods + updatedBarcodes}.`, "success");
+      } catch (error) {
+        console.error("Product database import error:", error);
+        showToast(`Не вдалося імпортувати базу: ${error.message}`, "error");
+      } finally {
+        event.target.value = "";
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const downloadProductImportTemplate = () => {
+    const csv = [
+      "name,brand,supermarket,category,calories,protein,fat,carbs,weight,barcode,aliases,ingredients,icon",
+      "Молоко 2.5%,Своя Лінія,АТБ,Сніданок,52,2.8,2.5,4.7,100,,молоко;атб,,🥛",
+      "Гречка варена,,,Обід,110,3.6,1.1,21.3,100,,гречана каша,,🍚"
+    ].join("\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "nutrisnap_products_template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const calPercent = Math.min((totals.calories / profile.targetCalories) * 100, 100);
   const radius = 58;
   const circumference = 2 * Math.PI * radius;
@@ -4633,6 +4878,98 @@ export default function App() {
               </div>
             </div>
 
+            {/* Product Database Card */}
+            <div className="glass-card database-manager-card" style={{ marginTop: '16px' }}>
+              <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Database size={18} style={{ color: 'var(--color-calories)' }} />
+                База продуктів
+              </h3>
+
+              <div className="database-stat-grid">
+                <div className="database-stat-tile">
+                  <span>Усього</span>
+                  <strong>{databaseStats.total}</strong>
+                </div>
+                <div className="database-stat-tile">
+                  <span>Каталог</span>
+                  <strong>{databaseStats.catalog}</strong>
+                </div>
+                <div className="database-stat-tile">
+                  <span>Моя база</span>
+                  <strong>{databaseStats.custom}</strong>
+                </div>
+                <div className="database-stat-tile">
+                  <span>Штрих-коди</span>
+                  <strong>{databaseStats.customBarcodes}</strong>
+                </div>
+              </div>
+
+              <div className="database-source-list">
+                {databaseStats.topSources.map(([source, count]) => (
+                  <div key={source} className="database-source-row">
+                    <span>{source}</span>
+                    <strong>{count}</strong>
+                  </div>
+                ))}
+              </div>
+
+              <p className="settings-info-text" style={{ marginTop: '12px' }}>
+                Власні продукти і штрих-коди мають пріоритет над зовнішніми підказками. Імпорт CSV/JSON додає продукти у вашу локальну базу на цьому пристрої.
+              </p>
+
+              <div className="database-action-grid">
+                <button
+                  type="button"
+                  className="database-action-btn primary"
+                  onClick={() => {
+                    setCustomFoodName('');
+                    setCustomFoodCalories('');
+                    setCustomFoodProtein('');
+                    setCustomFoodFat('');
+                    setCustomFoodCarbs('');
+                    setCustomFoodWeight('100');
+                    setCustomFoodEditTarget(null);
+                    setIsCustomFoodModalOpen(true);
+                  }}
+                >
+                  <Plus size={16} />
+                  Додати вручну
+                </button>
+
+                <label className="database-action-btn">
+                  <Upload size={16} />
+                  Імпорт CSV/JSON
+                  <input
+                    type="file"
+                    accept=".csv,.json,text/csv,application/json"
+                    onChange={importProductDatabase}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  className="database-action-btn"
+                  onClick={downloadProductImportTemplate}
+                >
+                  <Download size={16} />
+                  Шаблон CSV
+                </button>
+
+                <button
+                  type="button"
+                  className="database-action-btn"
+                  onClick={() => {
+                    setScannerMode('search');
+                    setActiveTab('scanner');
+                  }}
+                >
+                  <Search size={16} />
+                  Пошук у базі
+                </button>
+              </div>
+            </div>
+
             {/* Backup Configuration Card */}
             <div className="glass-card" style={{ marginTop: '16px' }}>
               <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -4672,7 +5009,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.4.6 (Camera Controls Fit)</p>
+              <p>NutriSnap v1.4.7 (Product Database Import)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
