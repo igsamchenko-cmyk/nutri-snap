@@ -91,6 +91,56 @@ const hasFilledNutritionInputs = (...values) => (
   values.every(value => String(value ?? '').trim() !== '' && Number.isFinite(Number(value)))
 );
 
+const getQuickPortionPresets = (baseWeight = 100, name = '') => {
+  const normalizedName = normalizeSearchText(name);
+  const presets = new Map();
+
+  const addPreset = (label, value, preferLabel = false) => {
+    const numericValue = Math.round(Number(value));
+    if (!numericValue || numericValue < 1 || numericValue > 5000) return;
+    if (presets.has(numericValue) && !preferLabel) return;
+    presets.set(numericValue, { label, value: numericValue });
+  };
+
+  [50, 100, 150, 200].forEach(value => addPreset(`${value} г`, value));
+
+  const numericBaseWeight = Math.round(Number(baseWeight) || 100);
+  if (numericBaseWeight !== 100) {
+    const servingLabel = (
+      normalizedName.includes('шт') ? '1 шт' :
+      normalizedName.includes('порц') ? '1 порція' :
+      normalizedName.includes('лож') || normalizedName.includes('ст. л') ? '1 ст. л.' :
+      normalizedName.includes('ч. л') ? '1 ч. л.' :
+      `${numericBaseWeight} г`
+    );
+
+    addPreset(servingLabel, numericBaseWeight, true);
+    addPreset('2 порції', numericBaseWeight * 2);
+  }
+
+  return Array.from(presets.values()).slice(0, 6);
+};
+
+const QuickPortionButtons = ({ baseWeight, name, currentWeight, onSelect }) => {
+  const presets = getQuickPortionPresets(baseWeight, name);
+  const currentNumericWeight = Math.round(Number(currentWeight) || 0);
+
+  return (
+    <div className="quick-portion-row" aria-label="Швидкі порції">
+      {presets.map(preset => (
+        <button
+          key={`${preset.label}-${preset.value}`}
+          type="button"
+          className={`quick-portion-chip ${currentNumericWeight === preset.value ? 'active' : ''}`}
+          onClick={() => onSelect(preset.value)}
+        >
+          {preset.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
 const findBestFoodMatchByName = (foodName, foods) => {
   const query = normalizeSearchText(foodName);
   const tokens = query.split(/\s+/).filter(token => token.length >= 2);
@@ -3275,6 +3325,13 @@ export default function App() {
                         </div>
                       </div>
 
+                      <QuickPortionButtons
+                        baseWeight={scanResult.weight || editedWeight}
+                        name={scanResult.name}
+                        currentWeight={editedWeight}
+                        onSelect={handleScanWeightChange}
+                      />
+
                       <div className="detail-row">
                         <span className="detail-label">Інгредієнти:</span>
                         <span className="detail-value">{scanResult.ingredients || "Не визначено"}</span>
@@ -3568,6 +3625,13 @@ export default function App() {
                           <span style={{ fontSize: '11px', opacity: 0.6 }}>(ориг. {barcodeResult.weight}г)</span>
                         </div>
                       </div>
+
+                      <QuickPortionButtons
+                        baseWeight={barcodeResult.weight || 100}
+                        name={barcodeResult.name}
+                        currentWeight={barcodeEditedWeight}
+                        onSelect={handleBarcodeWeightChange}
+                      />
 
                       {barcodeResult.ingredients && (
                         <div className="detail-row">
@@ -4152,6 +4216,13 @@ export default function App() {
                               <span style={{ fontSize: '11px', opacity: 0.6 }}>(ориг. {selectedSearchFood.weight}г)</span>
                             </div>
                           </div>
+
+                          <QuickPortionButtons
+                            baseWeight={selectedSearchFood.weight || 100}
+                            name={selectedSearchFood.name}
+                            currentWeight={searchFoodWeight}
+                            onSelect={setSearchFoodWeight}
+                          />
 
                           {selectedSearchFood.ingredients && (
                             <div className="detail-row" style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
@@ -5124,7 +5195,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.5.1 (Frequent Foods)</p>
+              <p>NutriSnap v1.5.2 (Quick Portions)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {

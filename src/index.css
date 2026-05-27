@@ -1766,6 +1766,48 @@ body.light-mode .weight-input {
   box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.2);
 }
 
+.quick-portion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 14px;
+}
+
+.quick-portion-chip {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-dark);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dark-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.quick-portion-chip:hover,
+.quick-portion-chip.active {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.16);
+  color: #86efac;
+}
+
+body.light-mode .quick-portion-chip {
+  border-color: var(--border-light);
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--text-light-secondary);
+}
+
+body.light-mode .quick-portion-chip:hover,
+body.light-mode .quick-portion-chip.active {
+  border-color: rgba(5, 150, 105, 0.4);
+  background: rgba(5, 150, 105, 0.12);
+  color: #047857;
+}
+
 /* Inline weight input in daily meals timeline */
 .meal-weight-input {
   width: 70px;
