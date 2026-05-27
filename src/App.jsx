@@ -1951,15 +1951,51 @@ export default function App() {
   ], [customFoods, customBarcodes]);
 
   const indexedCombinedFoods = useMemo(() => (
-    combinedFoods.map(food => ({
+    combinedFoods.map((food, index) => ({
       ...food,
-      searchIndexText: getFoodSearchText(food)
+      searchIndexText: getFoodSearchText(food),
+      catalogOrder: index
     }))
   ), [combinedFoods]);
 
   const normalizedSearchQuery = useMemo(() => normalizeSearchText(searchQuery), [searchQuery]);
   const searchTokens = useMemo(() => normalizedSearchQuery.split(/\s+/).filter(Boolean), [normalizedSearchQuery]);
   const favoriteNameSet = useMemo(() => new Set(favorites.map(fav => normalizeSearchText(fav.name))), [favorites]);
+  const mealUsageStats = useMemo(() => {
+    const stats = new Map();
+    meals.forEach((meal, index) => {
+      const key = normalizeSearchText(meal.name);
+      if (!key) return;
+      const current = stats.get(key) || { count: 0, firstIndex: index };
+      stats.set(key, {
+        count: current.count + 1,
+        firstIndex: Math.min(current.firstIndex, index)
+      });
+    });
+    return stats;
+  }, [meals]);
+
+  const getFoodUsageCount = (food) => mealUsageStats.get(normalizeSearchText(food.name))?.count || 0;
+
+  const getFoodSearchRank = (food) => {
+    let score = 0;
+    const usage = getFoodUsageCount(food);
+    const normalizedName = normalizeSearchText(food.name);
+
+    if (food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual') score += 100000;
+    if (favoriteNameSet.has(normalizedName)) score += 600;
+    if (usage > 0) score += Math.min(usage, 30) * 450;
+    if (food.source === 'ua-core') score += 120;
+    if (food.source === 'ua-seed') score += 60;
+
+    if (normalizedSearchQuery) {
+      if (normalizedName === normalizedSearchQuery) score += 900;
+      else if (normalizedName.startsWith(normalizedSearchQuery)) score += 500;
+      else if (normalizedName.includes(normalizedSearchQuery)) score += 220;
+    }
+
+    return score;
+  };
 
   const filteredSearchFoods = useMemo(() => indexedCombinedFoods.filter(food => {
     const matchesQuery = searchTokens.length === 0 || searchTokens.every(token => food.searchIndexText.includes(token));
@@ -1969,6 +2005,7 @@ export default function App() {
     if (selectedCategoryFilter === 'Моя база') {
       return Boolean(food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual');
     }
+    if (selectedCategoryFilter === 'Часті') return getFoodUsageCount(food) > 0;
     if (selectedCategoryFilter === 'Супермаркети') {
       if (food.supermarket || food.source === 'ua-seed') return true;
       const isSupermarket = food.brand && (
@@ -2007,7 +2044,11 @@ export default function App() {
       return favoriteNameSet.has(normalizeSearchText(food.name));
     }
     return true;
-  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, favoriteNameSet]);
+  }).sort((a, b) => {
+    const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
+    if (rankDiff !== 0) return rankDiff;
+    return a.catalogOrder - b.catalogOrder;
+  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, favoriteNameSet, mealUsageStats, normalizedSearchQuery]);
 
   const filteredExternalSearchFoods = useMemo(() => externalSearchFoods.filter(food => {
     if (selectedCategoryFilter === 'Усі') return true;
@@ -2026,8 +2067,13 @@ export default function App() {
 
     return indexedCombinedFoods
       .filter(food => searchTokens.every(token => food.searchIndexText.includes(token)))
+      .sort((a, b) => {
+        const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
+        if (rankDiff !== 0) return rankDiff;
+        return a.catalogOrder - b.catalogOrder;
+      })
       .slice(0, MAX_SEARCH_SUGGESTIONS);
-  }, [indexedCombinedFoods, searchTokens, showSuggestions]);
+  }, [indexedCombinedFoods, searchTokens, showSuggestions, favoriteNameSet, mealUsageStats, normalizedSearchQuery]);
 
   const databaseStats = useMemo(() => {
     const sourceCounts = productCatalog.reduce((acc, food) => {
@@ -3796,7 +3842,7 @@ export default function App() {
 
                 {/* Filter Chips */}
                 <div className="filter-chips-container">
-                  {['Усі', 'Моя база', 'Супермаркети', 'Страви', 'Обрані', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
+                  {['Усі', 'Моя база', 'Часті', 'Супермаркети', 'Страви', 'Обрані', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
                     <button
                       key={filter}
                       className={`filter-chip ${selectedCategoryFilter === filter ? 'active' : ''}`}
@@ -3892,6 +3938,11 @@ export default function App() {
                             >
                               <Pencil size={15} />
                             </button>
+                          )}
+                          {getFoodUsageCount(food) > 0 && (
+                            <span className="search-brand-badge search-usage-badge">
+                              {getFoodUsageCount(food)}x
+                            </span>
                           )}
                           {food.brand && <span className="search-brand-badge">{food.brand}</span>}
                         </div>
@@ -5073,7 +5124,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.5.0 (Smart Scan Fallback)</p>
+              <p>NutriSnap v1.5.1 (Frequent Foods)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {

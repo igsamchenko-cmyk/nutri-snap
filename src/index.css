@@ -2900,6 +2900,12 @@ body.light-mode .search-food-item:hover {
   border: 1px solid transparent;
 }
 
+.search-usage-badge {
+  background: rgba(16, 185, 129, 0.14);
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.22);
+}
+
 .search-edit-btn {
   width: 36px;
   height: 36px;
@@ -2921,6 +2927,12 @@ body.light-mode .search-brand-badge {
   background: rgba(0, 0, 0, 0.05);
   color: var(--text-light-secondary);
   border: 1px solid transparent;
+}
+
+body.light-mode .search-usage-badge {
+  background: rgba(16, 185, 129, 0.1);
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.18);
 }
 
 .database-manager-card {
