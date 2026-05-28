@@ -695,6 +695,65 @@ body.light-mode .nav-item:hover {
   color: var(--text-light-primary);
 }
 
+/* ── Mobile Nav: compact layout for narrow screens (≤430px) ──────────────────
+   Strategy: inactive tabs → icon only; active tab → icon + label + more room.
+   This prevents text overflow and button overlap on phones with ≤390px screens. */
+@media (max-width: 430px) {
+  .bottom-nav {
+    left: 10px;
+    width: calc(100% - 20px);
+    padding: 0 4px;
+    height: 64px;
+  }
+
+  .nav-item {
+    padding: 5px 2px;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Scale icons down slightly */
+  .nav-item svg {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+
+  /* Hide labels on inactive tabs */
+  .nav-item span {
+    display: none;
+  }
+
+  /* Active tab: label visible, bigger flex share */
+  .nav-item.active {
+    flex: 2;
+  }
+
+  .nav-item.active span {
+    display: block;
+    font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  /* Shrink FAB spacer proportionally */
+  .nav-item-spacer {
+    width: 56px;
+    flex-shrink: 0;
+  }
+
+  /* Shrink FAB to match spacer */
+  .scan-fab {
+    width: 56px;
+    height: 56px;
+  }
+  .scan-fab:hover  { transform: translateX(-50%) scale(1.08); }
+  .scan-fab:active { transform: translateX(-50%) scale(0.95); }
+}
+
 /* Camera Screen styles */
 .camera-view-container {
   width: 100%;
