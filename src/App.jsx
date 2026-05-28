@@ -2607,7 +2607,7 @@ export default function App() {
       
       {/* --- App Header --- */}
       <header className="app-header">
-        <div className="brand" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div className="brand">
           {activeTab !== 'dashboard' && (
             <button
               onClick={() => {
@@ -2632,22 +2632,12 @@ export default function App() {
               <ChevronLeft size={22} style={{ color: 'var(--color-calories)' }} />
             </button>
           )}
-          <span className="brand-logo">NutriSnap</span>
-          {(scanMode === 'gemini' || scanMode === 'openai') && (
-            <span style={{ 
-              fontSize: '10px', 
-              background: scanMode === 'openai' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(99, 102, 241, 0.15)', 
-              color: scanMode === 'openai' ? '#34d399' : '#818cf8', 
-              padding: '2px 6px', 
-              borderRadius: '8px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px',
-              fontWeight: 600
-            }}>
-              <Sparkles size={10} /> {scanMode === 'openai' ? 'GPT' : 'ШІ Gemini'}
+          <div className="brand-identity">
+            <span className="brand-logo">NutriSnap</span>
+            <span className="brand-credit">
+              developed by <strong>Ihor Samchenko</strong>
             </span>
-          )}
+          </div>
         </div>
         <button 
           className="theme-toggle" 
@@ -5303,7 +5293,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.5.5 (Undo Delete)</p>
+              <p>NutriSnap v1.5.6 (Typography Polish)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
