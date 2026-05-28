@@ -487,13 +487,13 @@ export default function App() {
 
   useEffect(() => {
     if (toast) {
-      const timer = setTimeout(() => setToast(null), 3000);
+      const timer = setTimeout(() => setToast(null), toast.duration || (toast.actionLabel ? 6000 : 3000));
       return () => clearTimeout(timer);
     }
   }, [toast]);
 
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
+  const showToast = (message, type = 'success', options = {}) => {
+    setToast({ message, type, ...options });
   };
 
   const isFavorite = (name) => {
@@ -2320,7 +2320,22 @@ export default function App() {
   };
 
   const deleteMeal = (id) => {
+    const deletedIndex = meals.findIndex(meal => meal.id === id);
+    if (deletedIndex === -1) return;
+
+    const deletedMeal = meals[deletedIndex];
     setMeals(prev => prev.filter(m => m.id !== id));
+    showToast(`"${deletedMeal.name}" видалено`, "warning", {
+      actionLabel: "Скасувати",
+      onAction: () => {
+        setMeals(prev => {
+          if (prev.some(meal => meal.id === deletedMeal.id)) return prev;
+          const nextMeals = [...prev];
+          nextMeals.splice(Math.min(deletedIndex, nextMeals.length), 0, deletedMeal);
+          return nextMeals;
+        });
+      }
+    });
   };
 
   const repeatMeal = (meal) => {
@@ -5288,7 +5303,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.5.4 (Repeat Meals)</p>
+              <p>NutriSnap v1.5.5 (Undo Delete)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
@@ -5645,6 +5660,18 @@ export default function App() {
               {toast.type === 'warning' && <AlertCircle size={16} style={{ color: '#f59e0b' }} />}
             </span>
             <span className="toast-message">{toast.message}</span>
+            {toast.actionLabel && (
+              <button
+                type="button"
+                className="toast-action-btn"
+                onClick={() => {
+                  toast.onAction?.();
+                  setToast(null);
+                }}
+              >
+                {toast.actionLabel}
+              </button>
+            )}
           </div>
         </div>
       )}

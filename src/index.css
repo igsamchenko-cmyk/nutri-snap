@@ -2727,10 +2727,39 @@ body.light-mode .toast-notification {
   font-weight: 600;
   color: var(--text-dark-primary);
   line-height: 1.4;
+  flex: 1;
 }
 
 body.light-mode .toast-message {
   color: var(--text-light-primary);
+}
+
+.toast-action-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 7px 10px;
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition-smooth);
+}
+
+.toast-action-btn:hover {
+  background: rgba(245, 158, 11, 0.28);
+  color: #fde68a;
+}
+
+body.light-mode .toast-action-btn {
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+}
+
+body.light-mode .toast-action-btn:hover {
+  background: rgba(217, 119, 6, 0.2);
+  color: #92400e;
 }
 
 .app-update-banner {
