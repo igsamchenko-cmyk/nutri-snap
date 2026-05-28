@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -26,7 +26,12 @@ import {
   Database,
   Star,
   Search,
-  X
+  X,
+  BarChart2,
+  TrendingUp,
+  Zap,
+  RotateCcw,
+  CalendarDays
 } from 'lucide-react';
 import { analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSmartProducts } from './services/geminiService';
 
@@ -126,18 +131,32 @@ export default function App() {
   const [profile, setProfile] = useState(() => {
     try {
       const saved = localStorage.getItem('nutrisnap_profile');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Міграція: додати нові поля якщо їх немає
+        return {
+          age: 25,
+          gender: 'male',
+          activityLevel: 'moderate',
+          targetWater: 2100,
+          ...parsed
+        };
+      }
     } catch (e) {
       console.error("Error reading nutrisnap_profile:", e);
     }
     return {
       weight: 70,
       height: 170,
+      age: 25,
+      gender: 'male', // male | female
+      activityLevel: 'moderate', // sedentary | light | moderate | active | veryActive
       goal: 'maintain', // lose | maintain | gain
       targetCalories: 2000,
       targetProtein: 150,
       targetFat: 55,
-      targetCarbs: 225
+      targetCarbs: 225,
+      targetWater: 2100
     };
   });
 
@@ -145,9 +164,9 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     try {
       const stored = localStorage.getItem('nutrisnap_apikey');
-      return stored ? stored.trim() : 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+      return stored ? stored.trim() : '';
     } catch (e) {
-      return 'AIzaSyCzENcpXKN36SmWqGyOkep8H4FZhzREMV4';
+      return '';
     }
   });
   const [scanMode, setScanMode] = useState('gemini');
@@ -1397,12 +1416,12 @@ export default function App() {
   };
 
   // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
-  const combinedFoods = [
+  const combinedFoods = useMemo(() => [
     ...mockFoods,
     ...customFoods.map(f => ({ 
       ...f, 
       isCustom: true, 
-      id: f.id || `custom-${f.name}-${Date.now()}`,
+      id: f.id || `custom-${f.name}`,
       brand: f.brand || "Мій продукт",
       icon: "🏷️"
     })),
@@ -1413,7 +1432,7 @@ export default function App() {
       brand: f.brand || "Штрих-код",
       icon: "🏷️"
     }))
-  ];
+  ], [customFoods, customBarcodes]);
 
   const filteredSearchFoods = combinedFoods.filter(food => {
     const matchesQuery = food.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -1586,28 +1605,84 @@ export default function App() {
     }));
   };
 
-  const deleteMeal = (id) => {
+  // Undo-delete: зберігаємо видалену страву для відновлення протягом 5 секунд
+  const deletedMealRef = useRef(null);
+  const deletedMealTimerRef = useRef(null);
+
+  const deleteMeal = useCallback((id) => {
+    const mealToDelete = meals.find(m => m.id === id);
+    if (!mealToDelete) return;
+
+    // Очищаємо попередній таймер якщо є
+    if (deletedMealTimerRef.current) {
+      clearTimeout(deletedMealTimerRef.current);
+    }
+
+    deletedMealRef.current = mealToDelete;
     setMeals(prev => prev.filter(m => m.id !== id));
+
+    setToast({
+      message: `"${mealToDelete.name}" видалено`,
+      type: 'undo',
+      onUndo: () => {
+        if (deletedMealRef.current) {
+          setMeals(prev => [...prev, deletedMealRef.current]);
+          deletedMealRef.current = null;
+          setToast(null);
+        }
+      }
+    });
+
+    deletedMealTimerRef.current = setTimeout(() => {
+      deletedMealRef.current = null;
+      setToast(prev => (prev && prev.type === 'undo') ? null : prev);
+    }, 5000);
+  }, [meals]);
+
+  // Розрахунок BMR за формулою Харріса-Бенедикта та TDEE
+  const calculateBMR = useCallback((w, h, a, g) => {
+    const weight = Number(w) || 70;
+    const height = Number(h) || 170;
+    const age = Number(a) || 25;
+    if (g === 'female') {
+      return Math.round(447.593 + 9.247 * weight + 3.098 * height - 4.330 * age);
+    }
+    return Math.round(88.362 + 13.397 * weight + 4.799 * height - 5.677 * age);
+  }, []);
+
+  const getActivityMultiplier = (level) => {
+    const multipliers = {
+      sedentary: 1.2,
+      light: 1.375,
+      moderate: 1.55,
+      active: 1.725,
+      veryActive: 1.9
+    };
+    return multipliers[level] || 1.55;
   };
 
-  // Зміна цільових КБЖВ при зміні ваги або цілі
+  // Зміна цільових КБЖВ при зміні ваги, зросту, віку, статі, рівня активності або цілі
   const handleProfileChange = (key, value) => {
     const updated = { ...profile, [key]: value };
     
-    // Перерахунок КБЖВ за замовчуванням при зміні цілі або ваги
-    if (key === 'goal' || key === 'weight') {
-      let baseCals = 2000;
+    // Перерахунок КБЖВ при зміні будь-якого параметру тіла або цілі
+    if (['goal', 'weight', 'height', 'age', 'gender', 'activityLevel'].includes(key)) {
       const weightNum = Number(updated.weight) || 70;
+      const bmr = calculateBMR(updated.weight, updated.height, updated.age, updated.gender);
+      const tdee = Math.round(bmr * getActivityMultiplier(updated.activityLevel));
       
+      let baseCals;
       if (updated.goal === 'lose') {
-        baseCals = Math.round(weightNum * 24); // Дефіцит
+        baseCals = Math.round(tdee * 0.8); // -20% дефіцит
       } else if (updated.goal === 'gain') {
-        baseCals = Math.round(weightNum * 35); // Профіцит
+        baseCals = Math.round(tdee * 1.15); // +15% профіцит
       } else {
-        baseCals = Math.round(weightNum * 30); // Підтримка
+        baseCals = tdee; // Підтримка = TDEE
       }
       
       updated.targetCalories = baseCals;
+      updated.bmr = bmr;
+      updated.tdee = tdee;
       // Білки (2.0г на кг для схуднення, 1.8г для підтримки/росту)
       updated.targetProtein = Math.round(weightNum * (updated.goal === 'lose' ? 2.0 : 1.8));
       // Жири (0.9г на кг)
@@ -1616,6 +1691,8 @@ export default function App() {
       const fatCals = updated.targetFat * 9;
       const protCals = updated.targetProtein * 4;
       updated.targetCarbs = Math.round((baseCals - fatCals - protCals) / 4);
+      // Ціль води: вага * 33 мл
+      updated.targetWater = Math.round(weightNum * 33);
     }
     
     setProfile(updated);
@@ -1711,6 +1788,50 @@ export default function App() {
   const radius = 58;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (calPercent / 100) * circumference;
+
+  // ТОП-5 найчастіших страв для швидкого додавання
+  const topMeals = useMemo(() => {
+    const counts = {};
+    meals.forEach(m => {
+      if (!m.name) return;
+      if (!counts[m.name]) {
+        counts[m.name] = { count: 0, meal: m };
+      }
+      counts[m.name].count++;
+      counts[m.name].meal = m; // оновлюємо дані останньою стравою
+    });
+    return Object.values(counts)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5)
+      .map(item => item.meal);
+  }, [meals]);
+
+  // Дані аналітики за 7 днів
+  const weeklyAnalytics = useMemo(() => {
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = getTodayString(d);
+      const dayMeals = meals.filter(m => m.date === dateStr);
+      const dayCalories = dayMeals.reduce((sum, m) => sum + (Number(m.calories) || 0), 0);
+      const dayProtein = Math.round(dayMeals.reduce((sum, m) => sum + (Number(m.protein) || 0), 10) / 10) * 10;
+      const dayWater = waterIntake[dateStr] || 0;
+      days.push({
+        dateStr,
+        label: d.toLocaleDateString('uk-UA', { weekday: 'short' }),
+        dayNum: d.getDate(),
+        calories: dayCalories,
+        protein: Math.round(dayMeals.reduce((sum, m) => sum + (Number(m.protein) || 0), 0) * 10) / 10,
+        fat: Math.round(dayMeals.reduce((sum, m) => sum + (Number(m.fat) || 0), 0) * 10) / 10,
+        carbs: Math.round(dayMeals.reduce((sum, m) => sum + (Number(m.carbs) || 0), 0) * 10) / 10,
+        water: dayWater,
+        goalPercent: profile.targetCalories > 0 ? Math.min(Math.round((dayCalories / profile.targetCalories) * 100), 100) : 0,
+        isToday: dateStr === getTodayString()
+      });
+    }
+    return days;
+  }, [meals, waterIntake, profile.targetCalories]);
 
   // Перемикання дат
   const changeDate = (days) => {
@@ -1810,6 +1931,16 @@ export default function App() {
                 <button className="date-arrow-btn" onClick={() => changeDate(1)}>
                   <ChevronRight size={20} />
                 </button>
+                {selectedDate !== getTodayString() && (
+                  <button
+                    className="today-jump-btn"
+                    onClick={() => setSelectedDate(getTodayString())}
+                    title="Перейти до сьогодні"
+                  >
+                    <CalendarDays size={14} />
+                    <span>Сьогодні</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1907,7 +2038,8 @@ export default function App() {
               <div className="water-left">
                 <div className="water-icon-box" style={{ overflow: 'visible', position: 'relative' }}>
                   {(() => {
-                    const waterPercent = Math.min((currentWater / 2000) * 100, 100);
+                    const waterTarget = profile.targetWater || 2000;
+                    const waterPercent = Math.min((currentWater / waterTarget) * 100, 100);
                     return (
                       <svg 
                         viewBox="0 0 24 24" 
@@ -1959,7 +2091,7 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="water-title">Вода</h3>
-                  <p className="water-progress">{currentWater} мл / 2000 мл</p>
+                  <p className="water-progress">{currentWater} мл / {profile.targetWater || 2000} мл</p>
                 </div>
               </div>
               <div className="water-actions">
@@ -1977,8 +2109,14 @@ export default function App() {
                 >
                   -250
                 </button>
+                <button className="btn-water-add" onClick={() => handleWaterAdd(150)} title="Додати 150мл (кружка espresso)">
+                  +150
+                </button>
                 <button className="btn-water-add" onClick={() => handleWaterAdd(250)} title="Додати 250мл">
                   +250
+                </button>
+                <button className="btn-water-add" onClick={() => handleWaterAdd(330)} title="Додати 330мл (бляшанка)">
+                  +330
                 </button>
                 <button className="btn-water-add" onClick={() => handleWaterAdd(500)} title="Додати 500мл">
                   +500
@@ -2060,6 +2198,52 @@ export default function App() {
                         </button>
                       </div>
                     </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Quick Add — ТОП-5 страв */}
+            {topMeals.length > 0 && (
+              <div className="quick-add-section" style={{ marginTop: '20px' }}>
+                <h3 className="section-title" style={{ marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Zap size={16} style={{ color: '#f59e0b' }} />
+                  Швидке додавання
+                </h3>
+                <div className="quick-add-tray">
+                  {topMeals.map((meal, idx) => (
+                    <button
+                      key={idx}
+                      className="quick-add-chip"
+                      onClick={() => {
+                        const category = getDefaultCategory();
+                        const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+                        const newMeal = {
+                          id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+                          name: meal.name,
+                          calories: Number(meal.calories) || 0,
+                          protein: Number(meal.protein) || 0,
+                          fat: Number(meal.fat) || 0,
+                          carbs: Number(meal.carbs) || 0,
+                          weight: Number(meal.weight) || 100,
+                          originalCalories: Number(meal.originalCalories || meal.calories) || 0,
+                          originalProtein: Number(meal.originalProtein || meal.protein) || 0,
+                          originalFat: Number(meal.originalFat || meal.fat) || 0,
+                          originalCarbs: Number(meal.originalCarbs || meal.carbs) || 0,
+                          originalWeight: Number(meal.originalWeight || meal.weight) || 100,
+                          category,
+                          time: mealTimeStr,
+                          date: selectedDate,
+                          icon: getEmojiForCategory(category)
+                        };
+                        setMeals(prev => [newMeal, ...prev]);
+                        showToast(`"${meal.name}" додано!`, 'success');
+                      }}
+                      title={`${meal.calories} ккал · ${meal.weight}г`}
+                    >
+                      <span className="quick-add-chip-name">{meal.name}</span>
+                      <span className="quick-add-chip-cals">{meal.calories} ккал</span>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -3716,6 +3900,28 @@ export default function App() {
           <div>
             <h2 className="section-title">Профіль користувача</h2>
             
+            {/* BMR/TDEE Info Card */}
+            {profile.bmr && (
+              <div className="glass-card" style={{ marginBottom: '12px', background: 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(16,185,129,0.05) 100%)' }}>
+                <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <TrendingUp size={16} style={{ color: 'var(--color-accent)' }} />
+                  Розрахований метаболізм (BMR/TDEE)
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div className="bmr-pill">
+                    <span className="bmr-pill-label">BMR (базовий)</span>
+                    <span className="bmr-pill-val">{profile.bmr} ккал</span>
+                    <span className="bmr-pill-desc">У спокої</span>
+                  </div>
+                  <div className="bmr-pill bmr-pill-tdee">
+                    <span className="bmr-pill-label">TDEE (з активністю)</span>
+                    <span className="bmr-pill-val">{profile.tdee} ккал</span>
+                    <span className="bmr-pill-desc">Ваша норма</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Profile Calculations Card */}
             <div className="glass-card">
               <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -3745,6 +3951,45 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="profile-grid-2col">
+                  <div className="settings-row">
+                    <span className="settings-label">Вік (років):</span>
+                    <input 
+                      type="number"
+                      className="settings-input"
+                      value={profile.age || 25}
+                      min="10" max="120"
+                      onChange={(e) => handleProfileChange('age', e.target.value)}
+                    />
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">Стать:</span>
+                    <select 
+                      className="settings-input settings-select"
+                      value={profile.gender || 'male'}
+                      onChange={(e) => handleProfileChange('gender', e.target.value)}
+                    >
+                      <option value="male">Чоловік</option>
+                      <option value="female">Жінка</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Рівень активності:</span>
+                  <select 
+                    className="settings-input settings-select"
+                    value={profile.activityLevel || 'moderate'}
+                    onChange={(e) => handleProfileChange('activityLevel', e.target.value)}
+                  >
+                    <option value="sedentary">Сидячий (без тренувань)</option>
+                    <option value="light">Легка активність (1-2 рази/тижд.)</option>
+                    <option value="moderate">Помірна активність (3-5 разів/тижд.)</option>
+                    <option value="active">Висока активність (6-7 разів/тижд.)</option>
+                    <option value="veryActive">Дуже висока (двічі на день)</option>
+                  </select>
+                </div>
+
                 <div className="settings-row">
                   <span className="settings-label">Ваша фітнес-ціль:</span>
                   <select 
@@ -3752,10 +3997,21 @@ export default function App() {
                     value={profile.goal}
                     onChange={(e) => handleProfileChange('goal', e.target.value)}
                   >
-                    <option value="lose">Схуднення (Дефіцит)</option>
-                    <option value="maintain">Підтримка ваги (Баланс)</option>
-                    <option value="gain">Набір маси (Профіцит)</option>
+                    <option value="lose">Схуднення (-20% від TDEE)</option>
+                    <option value="maintain">Підтримка ваги (= TDEE)</option>
+                    <option value="gain">Набір маси (+15% від TDEE)</option>
                   </select>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Ціль по воді (мл):</span>
+                  <input 
+                    type="number"
+                    className="settings-input"
+                    value={profile.targetWater || 2000}
+                    min="500" max="6000" step="50"
+                    onChange={(e) => setProfile(prev => ({ ...prev, targetWater: Math.max(500, Number(e.target.value) || 2000) }))}
+                  />
                 </div>
 
                 <div style={{ borderTop: '1px solid var(--border-dark)', paddingTop: '14px', marginTop: '4px' }}>
@@ -4079,6 +4335,124 @@ export default function App() {
           </div>
         )}
 
+        {/* ========================================================================= */}
+        {/* 6. ANALYTICS TAB */}
+        {/* ========================================================================= */}
+        {activeTab === 'analytics' && (
+          <div>
+            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <BarChart2 size={20} style={{ color: 'var(--color-accent)' }} />
+              Аналітика за 7 днів
+            </h2>
+
+            {/* Weekly calories bar chart */}
+            <div className="glass-card analytics-chart-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '14px', fontWeight: 600 }}>Калорії по днях</h3>
+                <span style={{ fontSize: '11px', color: 'var(--text-dark-muted)' }}>Ціль: {profile.targetCalories} ккал</span>
+              </div>
+              <div className="analytics-bars-container">
+                {weeklyAnalytics.map((day, i) => {
+                  const barHeight = day.calories > 0 ? Math.max((day.calories / Math.max(...weeklyAnalytics.map(d => Math.max(d.calories, profile.targetCalories)))) * 100, 4) : 0;
+                  const isOver = day.calories > profile.targetCalories;
+                  return (
+                    <div key={i} className={`analytics-bar-col ${day.isToday ? 'today' : ''}`}>
+                      <div className="analytics-bar-val">
+                        {day.calories > 0 ? day.calories : ''}
+                      </div>
+                      <div className="analytics-bar-track">
+                        {/* Goal line */}
+                        <div className="analytics-goal-line" style={{ bottom: `${Math.min((profile.targetCalories / Math.max(...weeklyAnalytics.map(d => Math.max(d.calories, profile.targetCalories)))) * 100, 100)}%` }} />
+                        <div
+                          className={`analytics-bar-fill ${isOver ? 'over-goal' : ''}`}
+                          style={{ height: `${barHeight}%` }}
+                        />
+                      </div>
+                      <div className="analytics-bar-label">{day.label}</div>
+                      <div className="analytics-bar-day">{day.dayNum}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="analytics-legend">
+                <span className="legend-item"><span className="legend-dot" style={{ background: 'var(--color-accent)' }}></span>Калорії</span>
+                <span className="legend-item"><span className="legend-line"></span>Ціль</span>
+                <span className="legend-item"><span className="legend-dot" style={{ background: '#f87171' }}></span>Перевищення</span>
+              </div>
+            </div>
+
+            {/* Weekly average stats */}
+            <div className="glass-card" style={{ marginTop: '12px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '14px' }}>Середні показники за тиждень</h3>
+              {(() => {
+                const activeDays = weeklyAnalytics.filter(d => d.calories > 0);
+                const avgCals = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.calories, 0) / activeDays.length) : 0;
+                const avgProtein = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.protein, 0) / activeDays.length * 10) / 10 : 0;
+                const avgWater = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.water, 0) / activeDays.length) : 0;
+                const loggedDays = activeDays.length;
+                return (
+                  <div className="analytics-stats-grid">
+                    <div className="analytics-stat-card">
+                      <div className="analytics-stat-val" style={{ color: 'var(--color-calories)' }}>{avgCals}</div>
+                      <div className="analytics-stat-label">ккал/день</div>
+                      <div className="analytics-stat-sub">{avgCals > 0 ? `${Math.round((avgCals/profile.targetCalories)*100)}% від цілі` : '–'}</div>
+                    </div>
+                    <div className="analytics-stat-card">
+                      <div className="analytics-stat-val" style={{ color: 'var(--color-protein)' }}>{avgProtein}г</div>
+                      <div className="analytics-stat-label">білки/день</div>
+                      <div className="analytics-stat-sub">{avgProtein > 0 ? `${Math.round((avgProtein/profile.targetProtein)*100)}% від цілі` : '–'}</div>
+                    </div>
+                    <div className="analytics-stat-card">
+                      <div className="analytics-stat-val" style={{ color: '#3b82f6' }}>{avgWater}</div>
+                      <div className="analytics-stat-label">мл води/день</div>
+                      <div className="analytics-stat-sub">{avgWater > 0 ? `${Math.round((avgWater/(profile.targetWater||2000))*100)}% від цілі` : '–'}</div>
+                    </div>
+                    <div className="analytics-stat-card">
+                      <div className="analytics-stat-val" style={{ color: '#f59e0b' }}>{loggedDays}/7</div>
+                      <div className="analytics-stat-label">днів у щоденнику</div>
+                      <div className="analytics-stat-sub">{loggedDays === 7 ? '🔥 Ідеально!' : loggedDays >= 5 ? '👍 Добре!' : 'Продовжуй!'}</div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Daily goal heatmap */}
+            <div className="glass-card" style={{ marginTop: '12px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '14px' }}>Виконання цілі по днях</h3>
+              <div className="heatmap-container">
+                {weeklyAnalytics.map((day, i) => (
+                  <div key={i} className="heatmap-day" onClick={() => { setSelectedDate(day.dateStr); setActiveTab('dashboard'); }}>
+                    <div
+                      className="heatmap-cell"
+                      style={{
+                        background: day.calories === 0
+                          ? 'rgba(255,255,255,0.04)'
+                          : day.goalPercent >= 90 && day.goalPercent <= 110
+                          ? 'rgba(16,185,129,0.7)'
+                          : day.goalPercent > 110
+                          ? 'rgba(239,68,68,0.6)'
+                          : `rgba(16,185,129,${day.goalPercent / 100 * 0.6 + 0.1})`,
+                        border: day.isToday ? '2px solid var(--color-accent)' : '2px solid transparent'
+                      }}
+                      title={`${day.goalPercent}% від цілі (${day.calories} ккал)`}
+                    >
+                      {day.goalPercent > 0 && <span style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>{day.goalPercent}%</span>}
+                    </div>
+                    <div className="heatmap-label">{day.label}</div>
+                    <div className="heatmap-day-num">{day.dayNum}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="heatmap-legend" style={{ marginTop: '10px', display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-dark-muted)' }}>
+                <span>🟩 90–110% = В нормі</span>
+                <span>🟥 &gt;110% = Перевищення</span>
+                <span>🟦 &lt;90% = Недобір</span>
+              </div>
+            </div>
+          </div>
+        )}
+
       </main>
 
       {/* --- App Camera Floating Action Button --- */}
@@ -4117,18 +4491,18 @@ export default function App() {
           <div className="nav-item-spacer"></div>
 
           <button 
+            className={`nav-item ${activeTab === 'analytics' ? 'active' : ''}`}
+            onClick={() => setActiveTab('analytics')}
+          >
+            <BarChart2 size={22} />
+            <span>Аналітика</span>
+          </button>
+          <button 
             className={`nav-item ${activeTab === 'profile' ? 'active' : ''}`}
             onClick={() => setActiveTab('profile')}
           >
             <User size={22} />
             <span>Профіль</span>
-          </button>
-          <button 
-            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => setActiveTab('settings')}
-          >
-            <Settings size={22} />
-            <span>Налаштування</span>
           </button>
         </nav>
       )}
@@ -4376,8 +4750,18 @@ export default function App() {
               {toast.type === 'error' && <AlertCircle size={16} style={{ color: '#ef4444' }} />}
               {toast.type === 'info' && <AlertCircle size={16} style={{ color: '#3b82f6' }} />}
               {toast.type === 'warning' && <AlertCircle size={16} style={{ color: '#f59e0b' }} />}
+              {toast.type === 'undo' && <Trash2 size={16} style={{ color: '#f87171' }} />}
             </span>
             <span className="toast-message">{toast.message}</span>
+            {toast.type === 'undo' && toast.onUndo && (
+              <button
+                className="toast-undo-btn"
+                onClick={toast.onUndo}
+              >
+                <RotateCcw size={13} />
+                Скасувати
+              </button>
+            )}
           </div>
         </div>
       )}
