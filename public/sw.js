@@ -1,10 +1,13 @@
-const CACHE_NAME = 'nutrisnap-cache-v71';
+const CACHE_NAME = 'nutrisnap-cache-v72';
 const BASE_PATH = '/nutri-snap';
 const ASSETS_TO_CACHE = [
   `${BASE_PATH}/`,
   `${BASE_PATH}/index.html`,
   `${BASE_PATH}/manifest.json`,
-  `${BASE_PATH}/favicon.svg`
+  `${BASE_PATH}/favicon.svg`,
+  `${BASE_PATH}/icon-192.png`,
+  `${BASE_PATH}/icon-512.png`,
+  `${BASE_PATH}/apple-touch-icon.png`
 ];
 
 self.addEventListener('install', (event) => {
