@@ -1495,6 +1495,11 @@ body.light-mode .meal-emoji {
   font-weight: 750;
   line-height: 1.25;
   color: var(--text-dark-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 body.light-mode .meal-name {

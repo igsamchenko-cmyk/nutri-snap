@@ -3241,7 +3241,7 @@ export default function App() {
                               <div className="meal-info">
                                 <div className="meal-text">
                                   <span className="meal-name" style={{ fontSize: '14px', fontWeight: 600 }}>{meal.name}</span>
-                                  <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                                  <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}>
                                     <input 
                                       type="number"
                                       value={meal.weight}
@@ -5058,7 +5058,7 @@ export default function App() {
                               <div className="meal-info">
                                 <div className="meal-text">
                                   <span className="meal-name" style={{ fontSize: '14px', fontWeight: 600 }}>{meal.name}</span>
-                                  <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                                  <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}>
                                     <input 
                                       type="number"
                                       value={meal.weight}
