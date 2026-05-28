@@ -1,0 +1,2 @@
+OPENAI_API_KEY=your_openai_api_key_here
+ALLOWED_ORIGIN=http://localhost:5180,https://igsamchenko-cmyk.github.io

@@ -9,25 +9,46 @@ createRoot(document.getElementById('root')).render(
   </StrictMode>,
 )
 
-// Реєстрація Service Worker для PWA
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then((reg) => {
-        console.log('PWA Service Worker зареєстровано:', reg.scope);
-      })
-      .catch((err) => {
-        console.error('Помилка реєстрації Service Worker:', err);
-      });
-  });
-
-  // Автоматичне перезавантаження сторінки при активації нового сервіс-воркера
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!refreshing) {
-      refreshing = true;
-      window.location.reload();
-    }
-  });
+const notifyUpdateAvailable = (registration) => {
+  window.dispatchEvent(new CustomEvent('nutrisnap-update-available', {
+    detail: { registration }
+  }))
 }
 
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    const serviceWorkerUrl = `${import.meta.env.BASE_URL}sw.js`
+    const serviceWorkerScope = import.meta.env.BASE_URL
+
+    navigator.serviceWorker.register(serviceWorkerUrl, { scope: serviceWorkerScope })
+      .then((registration) => {
+        console.log('PWA Service Worker зареєстровано:', registration.scope)
+
+        if (registration.waiting && navigator.serviceWorker.controller) {
+          notifyUpdateAvailable(registration)
+        }
+
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing
+          if (!newWorker) return
+
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              notifyUpdateAvailable(registration)
+            }
+          })
+        })
+      })
+      .catch((err) => {
+        console.error('Помилка реєстрації Service Worker:', err)
+      })
+  })
+
+  let refreshing = false
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!refreshing) {
+      refreshing = true
+      window.location.reload()
+    }
+  })
+}
