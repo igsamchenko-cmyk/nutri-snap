@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -26,14 +26,283 @@ import {
   Database,
   Star,
   Search,
+  Pencil,
   X,
   BarChart2,
   TrendingUp,
   Zap,
-  RotateCcw,
   CalendarDays
 } from 'lucide-react';
-import { analyzeFoodImage, detectBarcodeFromImage, estimateFoodNutritionByName, searchSmartProducts } from './services/geminiService';
+import {
+  SERVER_GEMINI_API_KEY,
+  analyzeFoodImage as analyzeFoodImageWithGemini,
+  detectBarcodeFromImage as detectBarcodeFromImageWithGemini,
+  searchSmartProducts as searchSmartProductsWithGemini
+} from './services/geminiService';
+import {
+  SERVER_OPENAI_API_KEY,
+  analyzeFoodImageWithOpenAI,
+  detectBarcodeFromImageWithOpenAI,
+  searchSmartProductsWithOpenAI
+} from './services/openaiService';
+import { mockFoods } from './data/mockFood';
+import { productCatalog } from './data/products';
+import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
+
+const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
+const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
+const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' : '';
+const MAX_LOCAL_SEARCH_RESULTS = 80;
+const MAX_SEARCH_SUGGESTIONS = 6;
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const PRODUCT_IMPORT_FIELDS = {
+  name: ["name", "назва", "продукт", "title"],
+  brand: ["brand", "бренд", "виробник"],
+  supermarket: ["supermarket", "магазин", "мережа"],
+  category: ["category", "категорія"],
+  calories: ["calories", "kcal", "ккал", "калорії"],
+  protein: ["protein", "білки"],
+  fat: ["fat", "жири"],
+  carbs: ["carbs", "вуглеводи"],
+  weight: ["weight", "вага", "порція"],
+  barcode: ["barcode", "штрихкод", "штрих-код"],
+  aliases: ["aliases", "синоніми"],
+  ingredients: ["ingredients", "склад"],
+  icon: ["icon", "emoji"]
+};
+
+const normalizeSearchText = (value = '') =>
+  String(value)
+    .toLowerCase()
+    .replace(/[ʼ'`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getFoodSearchText = (food) =>
+  normalizeSearchText([
+    food.name,
+    food.brand,
+    food.supermarket,
+    food.category,
+    food.searchText
+  ].filter(Boolean).join(' '));
+
+const hasCompleteNutritionValues = (item) => (
+  ["calories", "protein", "fat", "carbs"].every(field => Number.isFinite(Number(item?.[field])))
+);
+
+const hasFilledNutritionInputs = (...values) => (
+  values.every(value => String(value ?? '').trim() !== '' && Number.isFinite(Number(value)))
+);
+
+const getFoodPortionKey = (food) => {
+  if (!food) return '';
+  if (food.barcode) return `barcode:${String(food.barcode).trim()}`;
+  if (food.id) return `id:${String(food.id).trim()}`;
+  return `name:${normalizeSearchText([food.name, food.brand].filter(Boolean).join(' '))}`;
+};
+
+const getQuickPortionPresets = (baseWeight = 100, name = '', preferredWeight = null) => {
+  const normalizedName = normalizeSearchText(name);
+  const presets = new Map();
+
+  const addPreset = (label, value, options = {}) => {
+    const { preferLabel = false, isPreferred = false } = options;
+    const numericValue = Math.round(Number(value));
+    if (!numericValue || numericValue < 1 || numericValue > 5000) return;
+    if (presets.has(numericValue) && !preferLabel) return;
+    presets.set(numericValue, { label, value: numericValue, isPreferred });
+  };
+
+  addPreset('Звично', preferredWeight, { preferLabel: true, isPreferred: true });
+  [50, 100, 150, 200].forEach(value => addPreset(`${value} г`, value));
+
+  const numericBaseWeight = Math.round(Number(baseWeight) || 100);
+  if (numericBaseWeight !== 100) {
+    const servingLabel = (
+      normalizedName.includes('шт') ? '1 шт' :
+      normalizedName.includes('порц') ? '1 порція' :
+      normalizedName.includes('лож') || normalizedName.includes('ст. л') ? '1 ст. л.' :
+      normalizedName.includes('ч. л') ? '1 ч. л.' :
+      `${numericBaseWeight} г`
+    );
+
+    addPreset(servingLabel, numericBaseWeight, { preferLabel: true });
+    addPreset('2 порції', numericBaseWeight * 2);
+  }
+
+  addPreset('Звично', preferredWeight, { preferLabel: true, isPreferred: true });
+
+  return Array.from(presets.values()).slice(0, 6);
+};
+
+const QuickPortionButtons = ({ baseWeight, name, currentWeight, preferredWeight, onSelect }) => {
+  const presets = getQuickPortionPresets(baseWeight, name, preferredWeight);
+  const currentNumericWeight = Math.round(Number(currentWeight) || 0);
+
+  return (
+    <div className="quick-portion-row" aria-label="Швидкі порції">
+      {presets.map(preset => (
+        <button
+          key={`${preset.label}-${preset.value}`}
+          type="button"
+          className={`quick-portion-chip ${preset.isPreferred ? 'preferred' : ''} ${currentNumericWeight === preset.value ? 'active' : ''}`}
+          onClick={() => onSelect(preset.value)}
+        >
+          {preset.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+const findBestFoodMatchByName = (foodName, foods) => {
+  const query = normalizeSearchText(foodName);
+  const tokens = query.split(/\s+/).filter(token => token.length >= 2);
+  if (!query || tokens.length === 0) return null;
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  foods.forEach((food, index) => {
+    if (!hasCompleteNutritionValues(food)) return;
+
+    const name = normalizeSearchText(food.name);
+    const text = getFoodSearchText(food);
+    if (!tokens.every(token => text.includes(token))) return;
+
+    let score = 40;
+    if (name === query) score += 60;
+    else if (name.startsWith(query) || query.startsWith(name)) score += 35;
+    if (food.isCustom || food.isCustomBarcode || food.source === "manual" || food.dataQuality === "manual") score += 20;
+    if (food.source === "ua-core") score += 12;
+    score -= index * 0.01;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = food;
+    }
+  });
+
+  return bestScore >= 45 ? bestMatch : null;
+};
+
+const parseCsvText = (text) => {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      i += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") i += 1;
+      row.push(cell);
+      if (row.some(value => value.trim())) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  if (row.some(value => value.trim())) rows.push(row);
+  return rows;
+};
+
+const normalizeImportHeader = (value = "") => String(value).replace(/^\uFEFF/, "").trim().toLowerCase().replace(/\s+/g, " ");
+
+const getImportField = (row, field) => {
+  const aliases = PRODUCT_IMPORT_FIELDS[field] || [field];
+  for (const alias of aliases) {
+    const value = row[normalizeImportHeader(alias)];
+    if (value !== undefined && String(value).trim() !== "") return value;
+  }
+  return "";
+};
+
+const numberFromImport = (value, fallback = 0) => {
+  if (value === "" || value === null || value === undefined) return fallback;
+  const parsed = Number(String(value).replace(",", ".").trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const aliasesFromImport = (value) => String(value || "")
+  .split(/[;|]/)
+  .map(item => item.trim())
+  .filter(Boolean);
+
+const rowsFromProductImport = (text, fileName = "") => {
+  if (fileName.toLowerCase().endsWith(".json")) {
+    const data = JSON.parse(text);
+    const products = Array.isArray(data) ? data : [...(data.customFoods || []), ...Object.values(data.customBarcodes || {})];
+    return products.map(item => {
+      const row = {};
+      Object.entries(item || {}).forEach(([key, value]) => {
+        row[normalizeImportHeader(key)] = Array.isArray(value) ? value.join(";") : String(value ?? "");
+      });
+      return row;
+    });
+  }
+
+  const [headers, ...rows] = parseCsvText(text);
+  if (!headers?.length) return [];
+  const normalizedHeaders = headers.map(normalizeImportHeader);
+  return rows.map(values => {
+    const row = {};
+    normalizedHeaders.forEach((header, index) => {
+      row[header] = String(values[index] || "").trim();
+    });
+    return row;
+  });
+};
+
+const normalizeImportedProduct = (row, index) => {
+  const name = String(getImportField(row, "name") || "").trim();
+  if (!name) return null;
+
+  const baseWeight = Math.max(1, Math.round(numberFromImport(getImportField(row, "weight"), 100)));
+  const scaleTo100 = 100 / baseWeight;
+  const now = new Date().toISOString();
+  const barcode = String(getImportField(row, "barcode") || "").replace(/\D/g, "");
+  const brand = String(getImportField(row, "brand") || "").trim();
+  const supermarket = String(getImportField(row, "supermarket") || "").trim();
+  const aliases = aliasesFromImport(getImportField(row, "aliases"));
+
+  return {
+    id: barcode || `imported-${Date.now()}-${index}`,
+    barcode,
+    name,
+    brand: brand || "Моя база",
+    supermarket,
+    category: String(getImportField(row, "category") || "Інше").trim(),
+    calories: Math.round(numberFromImport(getImportField(row, "calories")) * scaleTo100),
+    protein: Math.round(numberFromImport(getImportField(row, "protein")) * scaleTo100 * 10) / 10,
+    fat: Math.round(numberFromImport(getImportField(row, "fat")) * scaleTo100 * 10) / 10,
+    carbs: Math.round(numberFromImport(getImportField(row, "carbs")) * scaleTo100 * 10) / 10,
+    weight: 100,
+    icon: String(getImportField(row, "icon") || "🏷️").trim(),
+    aliases,
+    ingredients: String(getImportField(row, "ingredients") || "").trim(),
+    source: barcode ? "manual-barcode-import" : "manual-import",
+    sourceLabel: barcode ? "Мій штрих-код" : "Моя база",
+    dataQuality: "manual",
+    searchText: [name, brand, supermarket, barcode, aliases.join(" "), "моя база імпорт"].filter(Boolean).join(" ").toLowerCase(),
+    createdAt: now,
+    updatedAt: now
+  };
+};
 
 // Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
 const parseLocalDate = (dateStr) => {
@@ -47,6 +316,14 @@ const getTodayString = (dateObj = new Date()) => {
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
   const day = String(dateObj.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const createMealId = () => {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 };
 
 // Форматування дати для відображення в інтерфейсі (українською)
@@ -101,10 +378,13 @@ export default function App() {
   const [aiSearchFoods, setAiSearchFoods] = useState([]);
   const [isSearchingExternal, setIsSearchingExternal] = useState(false);
   const [isSearchingAI, setIsSearchingAI] = useState(false);
-  const [lastAISearchQuery, setLastAISearchQuery] = useState('');
   const [isAIEstimating, setIsAIEstimating] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isNativeScannerSupported] = useState(() => 'BarcodeDetector' in window);
+  const externalSearchCacheRef = useRef(new Map());
+  const aiSearchCacheRef = useRef(new Map());
+  const aiSearchRequestIdRef = useRef(0);
+  const aiSearchInFlightKeyRef = useRef('');
   
   // Дані страв та води (ініціалізація з localStorage)
   const [meals, setMeals] = useState(() => {
@@ -149,9 +429,9 @@ export default function App() {
       weight: 70,
       height: 170,
       age: 25,
-      gender: 'male', // male | female
-      activityLevel: 'moderate', // sedentary | light | moderate | active | veryActive
-      goal: 'maintain', // lose | maintain | gain
+      gender: 'male',
+      activityLevel: 'moderate',
+      goal: 'maintain',
       targetCalories: 2000,
       targetProtein: 150,
       targetFat: 55,
@@ -164,12 +444,32 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     try {
       const stored = localStorage.getItem('nutrisnap_apikey');
-      return stored ? stored.trim() : '';
-    } catch (e) {
+      return stored ? stored.trim() : DEFAULT_API_KEY;
+    } catch {
+      return DEFAULT_API_KEY;
+    }
+  });
+  const [openAiApiKey, setOpenAiApiKey] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_openai_apikey') || '';
+    } catch {
       return '';
     }
   });
-  const [scanMode, setScanMode] = useState('gemini');
+  const [openAiProxyUrl, setOpenAiProxyUrl] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_openai_proxy_url') || DEFAULT_OPENAI_PROXY_URL;
+    } catch {
+      return DEFAULT_OPENAI_PROXY_URL;
+    }
+  });
+  const [scanMode, setScanMode] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_scanmode') || (DEFAULT_API_KEY ? 'gemini' : 'mock');
+    } catch {
+      return DEFAULT_API_KEY ? 'gemini' : 'mock';
+    }
+  });
   const [geminiModel, setGeminiModel] = useState(() => {
     try {
       return localStorage.getItem('nutrisnap_geminimodel') || 'gemini-2.5-flash';
@@ -177,6 +477,14 @@ export default function App() {
       return 'gemini-2.5-flash';
     }
   });
+  const [openAiModel, setOpenAiModel] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_openai_model') || DEFAULT_OPENAI_MODEL;
+    } catch {
+      return DEFAULT_OPENAI_MODEL;
+    }
+  });
+  const [updateRegistration, setUpdateRegistration] = useState(null);
 
   // --- Favorite Meals & Toast Notification States ---
   const [favorites, setFavorites] = useState(() => {
@@ -197,13 +505,13 @@ export default function App() {
 
   useEffect(() => {
     if (toast) {
-      const timer = setTimeout(() => setToast(null), 3000);
+      const timer = setTimeout(() => setToast(null), toast.duration || (toast.actionLabel ? 6000 : 3000));
       return () => clearTimeout(timer);
     }
   }, [toast]);
 
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
+  const showToast = (message, type = 'success', options = {}) => {
+    setToast({ message, type, ...options });
   };
 
   const isFavorite = (name) => {
@@ -320,15 +628,6 @@ export default function App() {
     return streak;
   };
 
-  // Автоматичне налаштування режиму сканування
-  useEffect(() => {
-    try {
-      localStorage.setItem('nutrisnap_scanmode', 'gemini');
-      setScanMode('gemini');
-    } catch (e) {
-      console.error("Error auto-configuring API key:", e);
-    }
-  }, []);
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem('nutrisnap_theme') || 'dark';
@@ -348,6 +647,7 @@ export default function App() {
   const [scannedCarbs, setScannedCarbs] = useState(0);
   const [scannedCalories, setScannedCalories] = useState(0);
   const [cameraStream, setCameraStream] = useState(null);
+  const [cameraRequested, setCameraRequested] = useState(false);
 
   // Ghost click protection state
   const [allowCameraTrigger, setAllowCameraTrigger] = useState(false);
@@ -357,6 +657,7 @@ export default function App() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [barcodeLoading, setBarcodeLoading] = useState(false);
   const [barcodeResult, setBarcodeResult] = useState(null);
+  const [barcodeCandidateProduct, setBarcodeCandidateProduct] = useState(null);
   const [barcodeEditedWeight, setBarcodeEditedWeight] = useState(100);
   const [barcodeScannedProtein, setBarcodeScannedProtein] = useState(0);
   const [barcodeScannedFat, setBarcodeScannedFat] = useState(0);
@@ -386,6 +687,16 @@ export default function App() {
     }
   });
 
+  const [rememberedFoodPortions, setRememberedFoodPortions] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nutrisnap_food_portions');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      console.error("Failed to load remembered portions:", e);
+      return {};
+    }
+  });
+
   const [isCustomFoodModalOpen, setIsCustomFoodModalOpen] = useState(false);
   const [customFoodName, setCustomFoodName] = useState('');
   const [customFoodCalories, setCustomFoodCalories] = useState('');
@@ -393,6 +704,7 @@ export default function App() {
   const [customFoodFat, setCustomFoodFat] = useState('');
   const [customFoodCarbs, setCustomFoodCarbs] = useState('');
   const [customFoodWeight, setCustomFoodWeight] = useState('100');
+  const [customFoodEditTarget, setCustomFoodEditTarget] = useState(null);
 
   // Fallback states for when a scanned barcode is not found
   const [barcodeNotFound, setBarcodeNotFound] = useState(null); // stores the scanned barcode string
@@ -495,8 +807,20 @@ export default function App() {
   }, [profile]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_apikey', apiKey.trim());
+    if (apiKey === SERVER_GEMINI_API_KEY) {
+      localStorage.removeItem('nutrisnap_apikey');
+    } else {
+      localStorage.setItem('nutrisnap_apikey', apiKey.trim());
+    }
   }, [apiKey]);
+
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_openai_apikey', openAiApiKey.trim());
+  }, [openAiApiKey]);
+
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_openai_proxy_url', openAiProxyUrl.trim());
+  }, [openAiProxyUrl]);
 
   useEffect(() => {
     localStorage.setItem('nutrisnap_scanmode', scanMode);
@@ -505,6 +829,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('nutrisnap_geminimodel', geminiModel);
   }, [geminiModel]);
+
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_openai_model', openAiModel);
+  }, [openAiModel]);
 
   useEffect(() => {
     localStorage.setItem('nutrisnap_theme', theme);
@@ -517,12 +845,61 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    const handleUpdateAvailable = (event) => {
+      setUpdateRegistration(event.detail?.registration || null);
+    };
+
+    window.addEventListener('nutrisnap-update-available', handleUpdateAvailable);
+    return () => window.removeEventListener('nutrisnap-update-available', handleUpdateAvailable);
+  }, []);
+
+  const applyAppUpdate = () => {
+    const waitingWorker = updateRegistration?.waiting;
+    if (waitingWorker) {
+      waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+    } else {
+      window.location.reload();
+    }
+  };
+
+  useEffect(() => {
     localStorage.setItem('nutrisnap_custom_barcodes', JSON.stringify(customBarcodes));
   }, [customBarcodes]);
 
   useEffect(() => {
     localStorage.setItem('nutrisnap_custom_foods', JSON.stringify(customFoods));
   }, [customFoods]);
+
+  useEffect(() => {
+    localStorage.setItem('nutrisnap_food_portions', JSON.stringify(rememberedFoodPortions));
+  }, [rememberedFoodPortions]);
+
+  const getRememberedFoodPortion = (food) => {
+    const key = getFoodPortionKey(food);
+    const rememberedWeight = Number(rememberedFoodPortions[key]);
+    return rememberedWeight > 0 && rememberedWeight <= 5000 ? rememberedWeight : null;
+  };
+
+  const getPreferredFoodWeight = (food, fallbackWeight = 100) => {
+    const fallback = Number(fallbackWeight || food?.weight || 100);
+    return getRememberedFoodPortion(food) || (fallback > 0 ? fallback : 100);
+  };
+
+  const rememberFoodPortion = (food, weight) => {
+    const key = getFoodPortionKey(food);
+    const numericWeight = Math.round(Number(weight));
+    if (!key || !numericWeight || numericWeight < 1 || numericWeight > 5000) return;
+
+    setRememberedFoodPortions(prev => {
+      if (Number(prev[key]) === numericWeight) return prev;
+      return { ...prev, [key]: numericWeight };
+    });
+  };
+
+  const selectSearchFood = (food) => {
+    setSelectedSearchFood(food);
+    setSearchFoodWeight(getPreferredFoodWeight(food, food?.weight));
+  };
 
   // Захист від фантомних натискань (ghost click protection) при відкритті сканера або зміні режимів
   useEffect(() => {
@@ -542,22 +919,30 @@ export default function App() {
   useEffect(() => {
     if (activeTab !== 'scanner' || scannerMode === 'search') {
       stopCamera();
+      setCameraRequested(false);
       if (activeTab !== 'scanner') {
         // Очищуємо результати пошуку штрих-кодів, якщо виходимо зі сканера повністю
         setScanResult(null);
         setBarcodeResult(null);
+        setBarcodeCandidateProduct(null);
         setBarcodeError(null);
         setBarcodeInput('');
       }
-    } else {
+    } else if (cameraRequested) {
       startCamera();
+    } else {
+      stopCamera();
     }
     return () => stopCamera();
-  }, [activeTab, scannerMode]);
+  }, [activeTab, scannerMode, cameraRequested]);
 
-  // Дебоунс-пошук продуктів в Open Food Facts API та автоматичний AI-пошук
+  // Дебоунс-пошук продуктів в українській базі Open Food Facts та автоматичний AI-пошук
   useEffect(() => {
-    if (activeTab !== 'scanner' || scannerMode !== 'search' || !searchQuery || searchQuery.trim().length < 2) {
+    const cleanQuery = searchQuery.trim();
+
+    if (activeTab !== 'scanner' || scannerMode !== 'search' || cleanQuery.length < 3) {
+      aiSearchRequestIdRef.current += 1;
+      aiSearchInFlightKeyRef.current = '';
       setExternalSearchFoods([]);
       setAiSearchFoods([]);
       setIsSearchingExternal(false);
@@ -565,40 +950,45 @@ export default function App() {
       return;
     }
 
-    setIsSearchingExternal(true);
+    let cancelled = false;
+    const cacheKey = normalizeSearchText(cleanQuery);
+    const cachedExternal = externalSearchCacheRef.current.get(cacheKey);
+
+    if (cachedExternal && Date.now() - cachedExternal.cachedAt < SEARCH_CACHE_TTL_MS) {
+      setExternalSearchFoods(cachedExternal.results);
+      setIsSearchingExternal(false);
+    } else {
+      setIsSearchingExternal(true);
+    }
+
     const delayTimer = setTimeout(async () => {
       try {
-        const results = await searchProductsByName(searchQuery);
-        setExternalSearchFoods(results);
-
-        // Перевіряємо, чи містить запит ключові слова українських супермаркетів
-        const queryLower = searchQuery.toLowerCase();
-        const hasSupermarketKeyword = [
-          'атб', 'atb', 
-          'сільпо', 'сильпо', 'silpo', 
-          'рукавичка', 'rukavychka', 
-          'близенько', 'blyzenko',
-          'своя лінія', 'своя линия',
-          'розумний вибір', 'умний вибір', 'розумний вибир',
-          'премія', 'премия',
-          'повна чаша',
-          'кухарочка'
-        ].some(keyword => queryLower.includes(keyword));
-
-        // Якщо є введений API-ключ Gemini, завжди запускаємо розумний пошук ШІ паралельно з OFF,
-        // щоб одразу отримувати сорти та варіації (яблуко Голден, Гала тощо)
-        if (apiKey && apiKey.trim() !== '') {
-          triggerAISmartSearch(searchQuery);
+        if (cachedExternal && Date.now() - cachedExternal.cachedAt < SEARCH_CACHE_TTL_MS) {
+          return;
         }
+
+        const results = await searchProductsByName(cleanQuery);
+        externalSearchCacheRef.current.set(cacheKey, {
+          cachedAt: Date.now(),
+          results
+        });
+
+        if (cancelled) return;
+        setExternalSearchFoods(results);
       } catch (err) {
         console.error("Error in live search query:", err);
       } finally {
-        setIsSearchingExternal(false);
+        if (!cancelled) {
+          setIsSearchingExternal(false);
+        }
       }
-    }, 600); // 600ms debounce
+    }, 900); // 900ms debounce
 
-    return () => clearTimeout(delayTimer);
-  }, [searchQuery, activeTab, scannerMode, apiKey]);
+    return () => {
+      cancelled = true;
+      clearTimeout(delayTimer);
+    };
+  }, [searchQuery, activeTab, scannerMode, scanMode, apiKey, openAiApiKey, openAiProxyUrl, geminiModel, openAiModel]);
 
   // --- Camera Operations ---
   const startCamera = async () => {
@@ -609,6 +999,7 @@ export default function App() {
       setCameraError(
         "Ваш браузер не підтримує доступ до камери або з'єднання незахищене (потрібен HTTPS). Скористайтеся завантаженням фотографії."
       );
+      setCameraRequested(false);
       return;
     }
 
@@ -649,6 +1040,7 @@ export default function App() {
           setCameraError(
             "Не вдалося отримати доступ до камери. Ви можете скористатися завантаженням фотографії з пристрою."
           );
+          setCameraRequested(false);
           return;
         }
       }
@@ -668,6 +1060,7 @@ export default function App() {
     } catch (err) {
       console.error("Camera stream binding failed:", err);
       setCameraError("Не вдалося запустити відеопотік з камери.");
+      setCameraRequested(false);
     }
   };
 
@@ -694,25 +1087,161 @@ export default function App() {
     bindVideo();
   }, [cameraActive, cameraStream]);
 
+  const getCurrentAiConfig = () => {
+    if (scanMode === 'openai') {
+      const proxyUrl = openAiProxyUrl.trim();
+      return {
+        provider: 'openai',
+        apiKey: proxyUrl ? SERVER_OPENAI_API_KEY : openAiApiKey.trim(),
+        model: openAiModel,
+        displayName: 'OpenAI GPT',
+        proxyUrl
+      };
+    }
+
+    return {
+      provider: 'gemini',
+      apiKey: apiKey.trim(),
+      model: geminiModel,
+      displayName: 'Gemini',
+      proxyUrl: ''
+    };
+  };
+
+  const analyzeFoodWithCurrentProvider = (imageDataBase64) => {
+    const config = getCurrentAiConfig();
+
+    if (!config.apiKey) {
+      throw new Error(`Будь ласка, введіть API-ключ ${config.displayName} у налаштуваннях додатку.`);
+    }
+
+    if (config.provider === 'openai') {
+      return analyzeFoodImageWithOpenAI(imageDataBase64, config.apiKey, config.model, config.proxyUrl);
+    }
+
+    return analyzeFoodImageWithGemini(imageDataBase64, config.apiKey, config.model);
+  };
+
+  const detectBarcodeWithCurrentProvider = (imageDataBase64) => {
+    const config = getCurrentAiConfig();
+
+    if (!config.apiKey) {
+      throw new Error(`Будь ласка, введіть API-ключ ${config.displayName} у налаштуваннях додатку.`);
+    }
+
+    if (config.provider === 'openai') {
+      return detectBarcodeFromImageWithOpenAI(imageDataBase64, config.apiKey, config.model, config.proxyUrl);
+    }
+
+    return detectBarcodeFromImageWithGemini(imageDataBase64, config.apiKey, config.model);
+  };
+
   // Запуск аналізу
+  const resetCustomFoodForm = () => {
+    setCustomFoodName('');
+    setCustomFoodCalories('');
+    setCustomFoodProtein('');
+    setCustomFoodFat('');
+    setCustomFoodCarbs('');
+    setCustomFoodWeight('100');
+    setCustomFoodEditTarget(null);
+  };
+
+  const closeCustomFoodModal = () => {
+    setIsCustomFoodModalOpen(false);
+    setCustomFoodEditTarget(null);
+  };
+
+  const openCustomFoodForm = (prefill = {}, editTarget = null) => {
+    setCustomFoodName(prefill.name || '');
+    setCustomFoodCalories(prefill.calories !== undefined ? String(prefill.calories) : '');
+    setCustomFoodProtein(prefill.protein !== undefined ? String(prefill.protein) : '');
+    setCustomFoodFat(prefill.fat !== undefined ? String(prefill.fat) : '');
+    setCustomFoodCarbs(prefill.carbs !== undefined ? String(prefill.carbs) : '');
+    setCustomFoodWeight(prefill.weight !== undefined ? String(prefill.weight) : '100');
+    setCustomFoodEditTarget(editTarget);
+    setIsCustomFoodModalOpen(true);
+  };
+
+  const openCustomFoodEditor = (food) => {
+    if (!food?.isCustom && !food?.isCustomBarcode) return;
+
+    openCustomFoodForm(
+      {
+        name: food.name,
+        calories: food.calories,
+        protein: food.protein,
+        fat: food.fat,
+        carbs: food.carbs,
+        weight: food.weight || 100
+      },
+      food.isCustomBarcode
+        ? { type: 'barcode', barcode: food.barcode }
+        : { type: 'food', id: food.id }
+    );
+  };
+
   const triggerScan = async (imageDataBase64) => {
     setIsScanning(true);
     setScanResult(null);
     setScannedMealCategory(preselectedCategory || getDefaultCategory());
     try {
-      if (!apiKey || apiKey.trim() === '') {
-        throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+      if (scanMode === 'mock') {
+        throw new Error("Для фото-сканування оберіть GPT (OpenAI) або Gemini у налаштуваннях ШІ.");
       }
-      // Запит до реального Gemini API
-      const result = await analyzeFoodImage(imageDataBase64, apiKey.trim(), geminiModel);
-      setScanResult(result);
-      setEditedWeight(Number(result.weight) || 200);
-      setScannedProtein(Number(result.protein) || 0);
-      setScannedFat(Number(result.fat) || 0);
-      setScannedCarbs(Number(result.carbs) || 0);
-      setScannedCalories(Number(result.calories) || 0);
+
+      const result = await analyzeFoodWithCurrentProvider(imageDataBase64);
+      const localNutritionMatch = findBestFoodMatchByName(result.name, [
+        ...Object.values(customBarcodes).map(food => ({ ...food, isCustomBarcode: true })),
+        ...customFoods.map(food => ({ ...food, isCustom: true })),
+        ...productCatalog,
+        ...mockFoods
+      ]);
+
+      const scanData = localNutritionMatch ? {
+        ...result,
+        name: localNutritionMatch.name,
+        calories: Number(localNutritionMatch.calories),
+        protein: Number(localNutritionMatch.protein),
+        fat: Number(localNutritionMatch.fat),
+        carbs: Number(localNutritionMatch.carbs),
+        weight: Number(localNutritionMatch.weight) || 100,
+        ingredients: localNutritionMatch.ingredients || result.ingredients || '',
+        dataQuality: "database_match",
+        needsManualNutrition: false,
+        confidence: Math.max(Number(result.confidence) || 0, 85),
+        warning: `КБЖВ взято з локальної бази: ${localNutritionMatch.brand || localNutritionMatch.sourceLabel || "продукт"}. Перевірте вагу перед додаванням.`
+      } : result;
+
+      if (scanData.needsManualNutrition || scanData.dataQuality === "insufficient" || !hasCompleteNutritionValues(scanData)) {
+        const fallbackSearchName = String(result?.name || scanData?.name || '').trim();
+        if (fallbackSearchName) {
+          setSearchQuery(fallbackSearchName);
+          setSelectedCategoryFilter('Усі');
+          setScannerMode('search');
+          setCameraRequested(false);
+          stopCamera();
+          showToast(`Камера впізнала "${fallbackSearchName}", але КБЖВ ненадійні. Показую схожі продукти з бази.`, "info");
+          return;
+        }
+        throw new Error(scanData.warning || "Не вдалося надійно визначити КБЖВ з фото. Щоб не показувати неправильні дані, введіть значення з етикетки вручну.");
+      }
+
+      const verifiedResult = {
+        ...scanData,
+        dataQuality: scanData.dataQuality || "estimate",
+        warning: scanData.warning || "КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням."
+      };
+
+      setScanResult(verifiedResult);
+      setEditedWeight(Number(verifiedResult.weight) || 200);
+      setScannedProtein(Number(verifiedResult.protein) || 0);
+      setScannedFat(Number(verifiedResult.fat) || 0);
+      setScannedCarbs(Number(verifiedResult.carbs) || 0);
+      setScannedCalories(Number(verifiedResult.calories) || 0);
     } catch (err) {
       console.error(err);
+      openCustomFoodForm({ weight: 100 });
       showToast(err.message || "Помилка під час аналізу страви.", "error");
     } finally {
       setIsScanning(false);
@@ -729,14 +1258,18 @@ export default function App() {
     if (!videoRef.current) return;
     
     const video = videoRef.current;
+    const sourceWidth = video.videoWidth || 640;
+    const sourceHeight = video.videoHeight || 480;
+    const maxSide = 960;
+    const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = Math.round(sourceWidth * scale);
+    canvas.height = Math.round(sourceHeight * scale);
     
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const base64Data = canvas.toDataURL('image/jpeg', 0.7);
+    const base64Data = canvas.toDataURL('image/jpeg', 0.62);
     triggerScan(base64Data);
   };
 
@@ -865,7 +1398,11 @@ export default function App() {
   const addScannedMealToDiary = () => {
     if (!scanResult) return;
 
-    const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+    if (scanResult.dataQuality !== "label_read" && scanResult.dataQuality !== "database_match") {
+      const confirmed = window.confirm("Це приблизна оцінка ШІ, а не точні дані з етикетки. Додати її до щоденника?");
+      if (!confirmed) return;
+    }
+
     const category = scannedMealCategory;
 
     const baselineWeight = Number(scanResult.weight) || 200;
@@ -877,7 +1414,7 @@ export default function App() {
     const finalCarbs = Number(scannedCarbs) || 0;
 
     const newMeal = {
-      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+      id: createMealId(),
       name: scanResult.name,
       calories: finalCalories,
       protein: finalProtein,
@@ -890,11 +1427,11 @@ export default function App() {
       originalCarbs: Number(scanResult.carbs),
       originalWeight: baselineWeight,
       category,
-      time: mealTimeStr,
       date: selectedDate,
       icon: getEmojiForCategory(category)
     };
 
+    rememberFoodPortion(scanResult, finalWeight);
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     
@@ -914,19 +1451,62 @@ export default function App() {
     return await getProductByBarcode(cleanBarcode);
   };
 
+  const prepareManualBarcodeEntry = (barcodeVal, product = null, message = "") => {
+    const cleanBarcode = barcodeVal?.trim() || product?.barcode || "";
+    setBarcodeResult(null);
+    setBarcodeCandidateProduct(product);
+    setBarcodeNotFound(cleanBarcode);
+    setBarcodeError(message);
+    setFallbackName(product?.name || '');
+    setFallbackCalories('');
+    setFallbackProtein('');
+    setFallbackFat('');
+    setFallbackCarbs('');
+    setFallbackWeight(product?.weight ? String(product.weight) : '100');
+  };
+
+  const setVerifiedBarcodeProduct = (product, barcodeVal = "") => {
+    if (product?.source === "openfoodfacts") {
+      prepareManualBarcodeEntry(
+        barcodeVal,
+        product,
+        "Зовнішня база знайшла товар, але її КБЖВ не використовуються автоматично. Введіть значення з етикетки."
+      );
+      return false;
+    }
+
+    if (!hasCompleteNutritionValues(product)) {
+      throw new Error("У знайденого продукту немає повного набору КБЖВ. Щоб не показувати неправильні дані, внесіть значення з етикетки вручну.");
+    }
+
+    setBarcodeCandidateProduct(null);
+    setBarcodeNotFound(null);
+    setBarcodeResult(product);
+    const w = getPreferredFoodWeight(product, product.weight || 100);
+    setBarcodeEditedWeight(w);
+    const scale = w / 100;
+    setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
+    setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
+    setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
+    setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+    return true;
+  };
+
   // Запуск аналізу штрих-коду ШІ
   const triggerBarcodeScan = async (imageDataBase64) => {
     setIsBarcodeScanning(true);
     setBarcodeError(null);
     setBarcodeResult(null);
+    setBarcodeCandidateProduct(null);
     setBarcodeNotFound(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     let detectedBarcode = null;
     try {
-      if (!apiKey || apiKey.trim() === '') {
-        throw new Error("Будь ласка, введіть власний безкоштовний Gemini API-ключ у налаштуваннях профілю.");
+      if (scanMode === 'mock') {
+        throw new Error("Для розпізнавання штрих-коду з фото оберіть GPT (OpenAI) або Gemini у налаштуваннях ШІ.");
       }
-      const barcodeVal = await detectBarcodeFromImage(imageDataBase64, apiKey.trim(), geminiModel);
+
+      const barcodeVal = await detectBarcodeWithCurrentProvider(imageDataBase64);
 
       if (!barcodeVal) {
         throw new Error("Не вдалося розпізнати штрих-код на фото. Спробуйте інший ракурс або введіть його вручну.");
@@ -937,25 +1517,12 @@ export default function App() {
       
       setBarcodeLoading(true);
       const product = await resolveBarcodeProduct(barcodeVal);
-      setBarcodeResult(product);
-      const w = product.weight || 100;
-      setBarcodeEditedWeight(w);
-      const scale = w / 100;
-      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
-      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
-      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
-      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+      setVerifiedBarcodeProduct(product, barcodeVal);
     } catch (err) {
       console.error(err);
       setBarcodeError(err.message || "Помилка при зчитуванні штрих-коду.");
       if (detectedBarcode) {
-        setBarcodeNotFound(detectedBarcode);
-        setFallbackName('');
-        setFallbackCalories('');
-        setFallbackProtein('');
-        setFallbackFat('');
-        setFallbackCarbs('');
-        setFallbackWeight('100');
+        prepareManualBarcodeEntry(detectedBarcode, null, err.message || "Не вдалося знайти надійні дані для цього штрих-коду.");
       }
     } finally {
       setIsBarcodeScanning(false);
@@ -991,35 +1558,24 @@ export default function App() {
     setBarcodeLoading(true);
     setBarcodeError(null);
     setBarcodeResult(null);
+    setBarcodeCandidateProduct(null);
     setBarcodeNotFound(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     
     try {
       const product = await resolveBarcodeProduct(barcodeVal);
-      setBarcodeResult(product);
-      const w = product.weight || 100;
-      setBarcodeEditedWeight(w);
-      const scale = w / 100;
-      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
-      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
-      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
-      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+      const accepted = setVerifiedBarcodeProduct(product, barcodeVal);
       
       // Вібрація для зворотного зв'язку при успішному зчитуванні
-      if (navigator.vibrate) {
+      if (accepted && navigator.vibrate) {
         navigator.vibrate(150);
       }
-      showToast("Штрих-код успішно розпізнано!", "success");
+      if (accepted) {
+        showToast("Штрих-код успішно розпізнано!", "success");
+      }
     } catch (err) {
       console.error("Direct barcode search error:", err);
-      setBarcodeError(err.message || "Не вдалося знайти товар за цим штрих-кодом.");
-      setBarcodeNotFound(barcodeVal);
-      setFallbackName('');
-      setFallbackCalories('');
-      setFallbackProtein('');
-      setFallbackFat('');
-      setFallbackCarbs('');
-      setFallbackWeight('100');
+      prepareManualBarcodeEntry(barcodeVal, null, err.message || "Не вдалося знайти надійні дані для цього штрих-коду.");
     } finally {
       setBarcodeLoading(false);
     }
@@ -1031,6 +1587,10 @@ export default function App() {
       showToast("Будь ласка, введіть назву продукту", "error");
       return;
     }
+    if (!hasFilledNutritionInputs(customFoodCalories, customFoodProtein, customFoodFat, customFoodCarbs, customFoodWeight)) {
+      showToast("Введіть вагу та всі КБЖВ з етикетки, щоб зберегти продукт у базу.", "error");
+      return;
+    }
 
     const kcalVal = Number(customFoodCalories) || 0;
     const proteinVal = Number(customFoodProtein) || 0;
@@ -1038,35 +1598,81 @@ export default function App() {
     const carbsVal = Number(customFoodCarbs) || 0;
     const defaultWeightVal = Number(customFoodWeight) || 100;
 
-    // Створюємо продукт, приведений до 100г
     const scaleTo100 = defaultWeightVal > 0 ? (100 / defaultWeightVal) : 1;
-    const newFood = {
-      id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    const now = new Date().toISOString();
+    const normalizedFood = {
       name: customFoodName.trim(),
       calories: Math.round(kcalVal * scaleTo100),
       protein: Math.round(proteinVal * scaleTo100 * 10) / 10,
       fat: Math.round(fatVal * scaleTo100 * 10) / 10,
       carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
-      weight: 100, // Базові нутрієнти зберігаємо на 100г
-      brand: "Мій продукт",
-      icon: "🏷️"
+      weight: 100,
+      brand: "Моя база",
+      icon: "🏷️",
+      source: "manual",
+      sourceLabel: "Моя база",
+      dataQuality: "manual",
+      searchText: `${customFoodName.trim()} моя база введено вручну`.toLowerCase(),
+      updatedAt: now
+    };
+
+    if (customFoodEditTarget?.type === 'barcode') {
+      const barcode = customFoodEditTarget.barcode;
+      const updatedProduct = {
+        ...(customBarcodes[barcode] || {}),
+        ...normalizedFood,
+        barcode,
+        id: customBarcodes[barcode]?.id || `barcode-${barcode}`,
+        createdAt: customBarcodes[barcode]?.createdAt || now
+      };
+
+      setCustomBarcodes(prev => ({
+        ...prev,
+        [barcode]: updatedProduct
+      }));
+      setSelectedSearchFood(prev => prev?.isCustomBarcode && prev.barcode === barcode ? { ...updatedProduct, isCustomBarcode: true } : prev);
+      setBarcodeResult(prev => prev?.barcode === barcode ? updatedProduct : prev);
+      rememberFoodPortion(updatedProduct, defaultWeightVal);
+      showToast(`"${updatedProduct.name}" оновлено у вашій базі.`, "success");
+      closeCustomFoodModal();
+      resetCustomFoodForm();
+      return;
+    }
+
+    if (customFoodEditTarget?.type === 'food') {
+      const updatedFood = {
+        ...normalizedFood,
+        id: customFoodEditTarget.id,
+        createdAt: customFoods.find(food => food.id === customFoodEditTarget.id)?.createdAt || now
+      };
+
+      setCustomFoods(prev => prev.map(food => (
+        food.id === customFoodEditTarget.id ? { ...food, ...updatedFood } : food
+      )));
+      setSelectedSearchFood(prev => prev?.isCustom && prev.id === customFoodEditTarget.id ? { ...updatedFood, isCustom: true } : prev);
+      rememberFoodPortion(updatedFood, defaultWeightVal);
+      showToast(`"${updatedFood.name}" оновлено у вашій базі.`, "success");
+      closeCustomFoodModal();
+      resetCustomFoodForm();
+      return;
+    }
+
+    const newFood = {
+      ...normalizedFood,
+      id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      createdAt: now
     };
 
     setCustomFoods(prev => [newFood, ...prev]);
+    rememberFoodPortion(newFood, defaultWeightVal);
 
-    // Скидаємо форму
-    setCustomFoodName('');
-    setCustomFoodCalories('');
-    setCustomFoodProtein('');
-    setCustomFoodFat('');
-    setCustomFoodCarbs('');
-    setCustomFoodWeight('100');
-    setIsCustomFoodModalOpen(false);
+    closeCustomFoodModal();
+    resetCustomFoodForm();
 
-    showToast(`Продукт "${newFood.name}" створено та збережено!`, "success");
+    showToast(`"${newFood.name}" збережено у вашу базу продуктів!`, "success");
 
     // Відразу відкриваємо діалог додавання до щоденника
-    setSelectedSearchFood(newFood);
+    setSelectedSearchFood({ ...newFood, isCustom: true });
     setSearchFoodWeight(defaultWeightVal);
     setSearchMealCategory(getDefaultCategory());
   };
@@ -1078,6 +1684,10 @@ export default function App() {
       return;
     }
     if (!barcodeNotFound) return;
+    if (!hasFilledNutritionInputs(fallbackCalories, fallbackProtein, fallbackFat, fallbackCarbs, fallbackWeight)) {
+      showToast("Введіть вагу та всі КБЖВ з етикетки, щоб зберегти продукт для штрих-коду.", "error");
+      return;
+    }
 
     const kcalVal = Number(fallbackCalories) || 0;
     const proteinVal = Number(fallbackProtein) || 0;
@@ -1094,14 +1704,20 @@ export default function App() {
       fat: Math.round(fatVal * scaleTo100 * 10) / 10,
       carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
       weight: 100, // Базові нутрієнти зберігаємо на 100г
-      brand: "Мій продукт",
-      icon: "🏷️"
+      brand: "Моя база",
+      icon: "🏷️",
+      source: "manual",
+      sourceLabel: "Моя база",
+      dataQuality: "manual",
+      searchText: `${fallbackName.trim()} ${barcodeNotFound} моя база штрих код введено вручну`.toLowerCase(),
+      createdAt: new Date().toISOString()
     };
 
     setCustomBarcodes(prev => ({
       ...prev,
       [barcodeNotFound]: newProduct
     }));
+    rememberFoodPortion(newProduct, defaultWeightVal);
 
     setFallbackName('');
     setFallbackCalories('');
@@ -1111,8 +1727,9 @@ export default function App() {
     setFallbackWeight('100');
     setIsBarcodeNotFoundModalOpen(false);
     setBarcodeNotFound(null);
+    setBarcodeCandidateProduct(null);
 
-    showToast(`Продукт успішно збережено для штрих-коду ${barcodeNotFound}!`, "success");
+    showToast(`"${newProduct.name}" збережено у вашу базу та прив'язано до штрих-коду!`, "success");
 
     // Відразу відкриваємо результат штрих-коду
     setBarcodeResult(newProduct);
@@ -1213,21 +1830,16 @@ export default function App() {
     setBarcodeLoading(true);
     setBarcodeError(null);
     setBarcodeResult(null);
+    setBarcodeCandidateProduct(null);
+    setBarcodeNotFound(null);
     setBarcodeMealCategory(preselectedCategory || getDefaultCategory());
     
     try {
-      const product = await getProductByBarcode(barcodeInput);
-      setBarcodeResult(product);
-      const w = product.weight || 100;
-      setBarcodeEditedWeight(w);
-      const scale = w / 100;
-      setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
-      setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
-      setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
-      setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+      const product = await resolveBarcodeProduct(barcodeInput);
+      setVerifiedBarcodeProduct(product, barcodeInput);
     } catch (err) {
       console.error("Barcode lookup error:", err);
-      setBarcodeError(err.message || "Не вдалося знайти продукт.");
+      prepareManualBarcodeEntry(barcodeInput.trim(), null, err.message || "Не вдалося знайти надійні дані для цього штрих-коду.");
     } finally {
       setBarcodeLoading(false);
     }
@@ -1294,7 +1906,6 @@ export default function App() {
   const addBarcodeMealToDiary = () => {
     if (!barcodeResult) return;
 
-    const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
     const category = barcodeMealCategory;
 
     const baselineWeight = 100;
@@ -1306,7 +1917,7 @@ export default function App() {
     const finalCarbs = Number(barcodeScannedCarbs) || 0;
 
     const newMeal = {
-      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+      id: createMealId(),
       name: barcodeResult.name,
       calories: finalCalories,
       protein: finalProtein,
@@ -1319,11 +1930,11 @@ export default function App() {
       originalCarbs: Number(barcodeResult.carbs),
       originalWeight: baselineWeight,
       category,
-      time: mealTimeStr,
       date: selectedDate,
       icon: getEmojiForCategory(category)
     };
 
+    rememberFoodPortion(barcodeResult, finalWeight);
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     showToast(`Продукт "${barcodeResult.name}" додано до щоденника!`, "success");
@@ -1347,8 +1958,6 @@ export default function App() {
   // --- Manual Search Helper Functions ---
   const addSearchMealToDiary = () => {
     if (!selectedSearchFood) return;
-    const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
-    
     const weightFactor = Number(searchFoodWeight) / Number(selectedSearchFood.weight);
     const finalCalories = Math.round(Number(selectedSearchFood.calories) * weightFactor);
     const finalProtein = Math.round(Number(selectedSearchFood.protein) * weightFactor * 10) / 10;
@@ -1356,7 +1965,7 @@ export default function App() {
     const finalCarbs = Math.round(Number(selectedSearchFood.carbs) * weightFactor * 10) / 10;
 
     const newMeal = {
-      id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+      id: createMealId(),
       name: selectedSearchFood.name,
       calories: finalCalories,
       protein: finalProtein,
@@ -1369,11 +1978,11 @@ export default function App() {
       originalCarbs: Number(selectedSearchFood.carbs),
       originalWeight: Number(selectedSearchFood.weight),
       category: searchMealCategory,
-      time: mealTimeStr,
       date: selectedDate,
       icon: selectedSearchFood.icon || getEmojiForCategory(searchMealCategory)
     };
 
+    rememberFoodPortion(selectedSearchFood, Number(searchFoodWeight));
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     showToast(`"${selectedSearchFood.name}" додано до щоденника!`, "success");
@@ -1385,17 +1994,33 @@ export default function App() {
 
   const triggerAISmartSearch = async (queryToSearch) => {
     if (!queryToSearch || !queryToSearch.trim()) return;
-    if (!apiKey || apiKey.trim() === '') return;
+    if (scanMode === 'mock') return;
+
+    const aiConfig = getCurrentAiConfig();
+    if (!aiConfig.apiKey) return;
     
     const cleanQuery = queryToSearch.trim();
-    if (cleanQuery.toLowerCase() === lastAISearchQuery.toLowerCase()) return;
-    
-    setLastAISearchQuery(cleanQuery);
+    const cacheKey = `${aiConfig.provider}:${aiConfig.model}:${normalizeSearchText(cleanQuery)}`;
+    const cachedAiResults = aiSearchCacheRef.current.get(cacheKey);
+
+    if (cachedAiResults && Date.now() - cachedAiResults.cachedAt < SEARCH_CACHE_TTL_MS) {
+      setAiSearchFoods(cachedAiResults.results);
+      return cachedAiResults.results;
+    }
+
+    if (aiSearchInFlightKeyRef.current === cacheKey) return;
+
+    const requestId = aiSearchRequestIdRef.current + 1;
+    aiSearchRequestIdRef.current = requestId;
+    aiSearchInFlightKeyRef.current = cacheKey;
     setIsSearchingAI(true);
+
     try {
-      const results = await searchSmartProducts(cleanQuery, apiKey, geminiModel);
+      const results = aiConfig.provider === 'openai'
+        ? await searchSmartProductsWithOpenAI(cleanQuery, aiConfig.apiKey, aiConfig.model, aiConfig.proxyUrl)
+        : await searchSmartProductsWithGemini(cleanQuery, aiConfig.apiKey, aiConfig.model);
       const formattedResults = (results || []).map(p => ({
-        id: p.id || 'ai-market-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+        id: p.id || `ai-market-${createMealId()}`,
         name: p.name,
         brand: p.brand || p.supermarket || "ШІ Пошук",
         supermarket: p.supermarket || "Загальний",
@@ -1407,21 +2032,37 @@ export default function App() {
         ingredients: p.ingredients || null,
         icon: p.icon || "🔮"
       }));
+
+      aiSearchCacheRef.current.set(cacheKey, {
+        cachedAt: Date.now(),
+        results: formattedResults
+      });
+
+      if (requestId !== aiSearchRequestIdRef.current) {
+        return formattedResults;
+      }
+
       setAiSearchFoods(formattedResults);
+      return formattedResults;
     } catch (err) {
       console.error("Error in AI smart search:", err);
+      return [];
     } finally {
-      setIsSearchingAI(false);
+      if (aiSearchInFlightKeyRef.current === cacheKey) {
+        aiSearchInFlightKeyRef.current = '';
+      }
+      if (requestId === aiSearchRequestIdRef.current) {
+        setIsSearchingAI(false);
+      }
     }
   };
 
   // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
   const combinedFoods = useMemo(() => [
-    ...mockFoods,
     ...customFoods.map(f => ({ 
       ...f, 
       isCustom: true, 
-      id: f.id || `custom-${f.name}`,
+      id: f.id || `custom-${f.name}-${Date.now()}`,
       brand: f.brand || "Мій продукт",
       icon: "🏷️"
     })),
@@ -1431,16 +2072,69 @@ export default function App() {
       id: f.id || `barcode-${f.barcode}`,
       brand: f.brand || "Штрих-код",
       icon: "🏷️"
-    }))
+    })),
+    ...productCatalog,
+    ...mockFoods
   ], [customFoods, customBarcodes]);
 
-  const filteredSearchFoods = combinedFoods.filter(food => {
-    const matchesQuery = food.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                         (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()));
+  const indexedCombinedFoods = useMemo(() => (
+    combinedFoods.map((food, index) => ({
+      ...food,
+      searchIndexText: getFoodSearchText(food),
+      catalogOrder: index
+    }))
+  ), [combinedFoods]);
+
+  const normalizedSearchQuery = useMemo(() => normalizeSearchText(searchQuery), [searchQuery]);
+  const searchTokens = useMemo(() => normalizedSearchQuery.split(/\s+/).filter(Boolean), [normalizedSearchQuery]);
+  const favoriteNameSet = useMemo(() => new Set(favorites.map(fav => normalizeSearchText(fav.name))), [favorites]);
+  const mealUsageStats = useMemo(() => {
+    const stats = new Map();
+    meals.forEach((meal, index) => {
+      const key = normalizeSearchText(meal.name);
+      if (!key) return;
+      const current = stats.get(key) || { count: 0, firstIndex: index };
+      stats.set(key, {
+        count: current.count + 1,
+        firstIndex: Math.min(current.firstIndex, index)
+      });
+    });
+    return stats;
+  }, [meals]);
+
+  const getFoodUsageCount = (food) => mealUsageStats.get(normalizeSearchText(food.name))?.count || 0;
+
+  const getFoodSearchRank = (food) => {
+    let score = 0;
+    const usage = getFoodUsageCount(food);
+    const normalizedName = normalizeSearchText(food.name);
+
+    if (food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual') score += 100000;
+    if (favoriteNameSet.has(normalizedName)) score += 600;
+    if (usage > 0) score += Math.min(usage, 30) * 450;
+    if (food.source === 'ua-core') score += 120;
+    if (food.source === 'ua-seed') score += 60;
+
+    if (normalizedSearchQuery) {
+      if (normalizedName === normalizedSearchQuery) score += 900;
+      else if (normalizedName.startsWith(normalizedSearchQuery)) score += 500;
+      else if (normalizedName.includes(normalizedSearchQuery)) score += 220;
+    }
+
+    return score;
+  };
+
+  const filteredSearchFoods = useMemo(() => indexedCombinedFoods.filter(food => {
+    const matchesQuery = searchTokens.length === 0 || searchTokens.every(token => food.searchIndexText.includes(token));
     if (!matchesQuery) return false;
 
     if (selectedCategoryFilter === 'Усі') return true;
+    if (selectedCategoryFilter === 'Моя база') {
+      return Boolean(food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual');
+    }
+    if (selectedCategoryFilter === 'Часті') return getFoodUsageCount(food) > 0;
     if (selectedCategoryFilter === 'Супермаркети') {
+      if (food.supermarket || food.source === 'ua-seed') return true;
       const isSupermarket = food.brand && (
         food.brand.includes('АТБ') || 
         food.brand.includes('Сільпо') || 
@@ -1474,22 +2168,60 @@ export default function App() {
     if (selectedCategoryFilter === 'Вечеря') return food.category === 'Вечеря';
     if (selectedCategoryFilter === 'Перекуси') return food.category === 'Перекус' || food.category === 'Перший перекус' || food.category === 'Другий перекус';
     if (selectedCategoryFilter === 'Обрані') {
-      return favorites.some(fav => fav.name === food.name);
+      return favoriteNameSet.has(normalizeSearchText(food.name));
     }
     return true;
-  });
+  }).sort((a, b) => {
+    const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
+    if (rankDiff !== 0) return rankDiff;
+    return a.catalogOrder - b.catalogOrder;
+  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, favoriteNameSet, mealUsageStats, normalizedSearchQuery]);
 
-  const filteredExternalSearchFoods = externalSearchFoods.filter(food => {
+  const filteredExternalSearchFoods = useMemo(() => externalSearchFoods.filter(food => {
     if (selectedCategoryFilter === 'Усі') return true;
     if (selectedCategoryFilter === 'Супермаркети') return true;
     return false;
-  });
+  }), [externalSearchFoods, selectedCategoryFilter]);
 
-  const filteredAiSearchFoods = aiSearchFoods.filter(food => {
+  const filteredAiSearchFoods = useMemo(() => aiSearchFoods.filter(food => {
     if (selectedCategoryFilter === 'Усі') return true;
     if (selectedCategoryFilter === 'Супермаркети') return true;
     return false;
-  });
+  }), [aiSearchFoods, selectedCategoryFilter]);
+
+  const searchSuggestions = useMemo(() => {
+    if (searchTokens.length === 0 || !showSuggestions) return [];
+
+    return indexedCombinedFoods
+      .filter(food => searchTokens.every(token => food.searchIndexText.includes(token)))
+      .sort((a, b) => {
+        const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
+        if (rankDiff !== 0) return rankDiff;
+        return a.catalogOrder - b.catalogOrder;
+      })
+      .slice(0, MAX_SEARCH_SUGGESTIONS);
+  }, [indexedCombinedFoods, searchTokens, showSuggestions, favoriteNameSet, mealUsageStats, normalizedSearchQuery]);
+
+  const databaseStats = useMemo(() => {
+    const sourceCounts = productCatalog.reduce((acc, food) => {
+      const source = food.sourceLabel || food.source || food.supermarket || food.brand || "Каталог";
+      acc[source] = (acc[source] || 0) + 1;
+      return acc;
+    }, {});
+
+    const verifiedCustomFoods = customFoods.filter(hasCompleteNutritionValues).length;
+    const verifiedBarcodes = Object.values(customBarcodes).filter(hasCompleteNutritionValues).length;
+
+    return {
+      catalog: productCatalog.length,
+      demo: mockFoods.length,
+      custom: customFoods.length,
+      customBarcodes: Object.keys(customBarcodes).length,
+      verifiedCustom: verifiedCustomFoods + verifiedBarcodes,
+      total: productCatalog.length + mockFoods.length + customFoods.length + Object.keys(customBarcodes).length,
+      topSources: Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 4)
+    };
+  }, [customFoods, customBarcodes]);
   // Оновлення ваги страви з пропорційним перерахунком КБЖВ
   const handleUpdateMealWeight = (mealId, value) => {
     setMeals(prevMeals => prevMeals.map(meal => {
@@ -1605,40 +2337,39 @@ export default function App() {
     }));
   };
 
-  // Undo-delete: зберігаємо видалену страву для відновлення протягом 5 секунд
-  const deletedMealRef = useRef(null);
-  const deletedMealTimerRef = useRef(null);
+  const deleteMeal = (id) => {
+    const deletedIndex = meals.findIndex(meal => meal.id === id);
+    if (deletedIndex === -1) return;
 
-  const deleteMeal = useCallback((id) => {
-    const mealToDelete = meals.find(m => m.id === id);
-    if (!mealToDelete) return;
-
-    // Очищаємо попередній таймер якщо є
-    if (deletedMealTimerRef.current) {
-      clearTimeout(deletedMealTimerRef.current);
-    }
-
-    deletedMealRef.current = mealToDelete;
+    const deletedMeal = meals[deletedIndex];
     setMeals(prev => prev.filter(m => m.id !== id));
-
-    setToast({
-      message: `"${mealToDelete.name}" видалено`,
-      type: 'undo',
-      onUndo: () => {
-        if (deletedMealRef.current) {
-          setMeals(prev => [...prev, deletedMealRef.current]);
-          deletedMealRef.current = null;
-          setToast(null);
-        }
+    showToast(`"${deletedMeal.name}" видалено`, "warning", {
+      actionLabel: "Скасувати",
+      onAction: () => {
+        setMeals(prev => {
+          if (prev.some(meal => meal.id === deletedMeal.id)) return prev;
+          const nextMeals = [...prev];
+          nextMeals.splice(Math.min(deletedIndex, nextMeals.length), 0, deletedMeal);
+          return nextMeals;
+        });
       }
     });
+  };
 
-    deletedMealTimerRef.current = setTimeout(() => {
-      deletedMealRef.current = null;
-      setToast(prev => (prev && prev.type === 'undo') ? null : prev);
-    }, 5000);
-  }, [meals]);
+  const repeatMeal = (meal) => {
+    const repeatedMeal = {
+      ...meal,
+      id: createMealId(),
+      date: selectedDate,
+      repeatedFrom: meal.id,
+      repeatedAt: new Date().toISOString()
+    };
 
+    setMeals(prev => [repeatedMeal, ...prev]);
+    showToast(`"${meal.name}" додано ще раз`, "success");
+  };
+
+  // Зміна цільових КБЖВ при зміні ваги або цілі
   // Розрахунок BMR за формулою Харріса-Бенедикта та TDEE
   const calculateBMR = useCallback((w, h, a, g) => {
     const weight = Number(w) || 70;
@@ -1661,11 +2392,9 @@ export default function App() {
     return multipliers[level] || 1.55;
   };
 
-  // Зміна цільових КБЖВ при зміні ваги, зросту, віку, статі, рівня активності або цілі
   const handleProfileChange = (key, value) => {
     const updated = { ...profile, [key]: value };
     
-    // Перерахунок КБЖВ при зміні будь-якого параметру тіла або цілі
     if (['goal', 'weight', 'height', 'age', 'gender', 'activityLevel'].includes(key)) {
       const weightNum = Number(updated.weight) || 70;
       const bmr = calculateBMR(updated.weight, updated.height, updated.age, updated.gender);
@@ -1673,25 +2402,21 @@ export default function App() {
       
       let baseCals;
       if (updated.goal === 'lose') {
-        baseCals = Math.round(tdee * 0.8); // -20% дефіцит
+        baseCals = Math.round(tdee * 0.8);
       } else if (updated.goal === 'gain') {
-        baseCals = Math.round(tdee * 1.15); // +15% профіцит
+        baseCals = Math.round(tdee * 1.15);
       } else {
-        baseCals = tdee; // Підтримка = TDEE
+        baseCals = tdee;
       }
       
       updated.targetCalories = baseCals;
       updated.bmr = bmr;
       updated.tdee = tdee;
-      // Білки (2.0г на кг для схуднення, 1.8г для підтримки/росту)
       updated.targetProtein = Math.round(weightNum * (updated.goal === 'lose' ? 2.0 : 1.8));
-      // Жири (0.9г на кг)
       updated.targetFat = Math.round(weightNum * 0.9);
-      // Вуглеводи (залишок калорій)
       const fatCals = updated.targetFat * 9;
       const protCals = updated.targetProtein * 4;
       updated.targetCarbs = Math.round((baseCals - fatCals - protCals) / 4);
-      // Ціль води: вага * 33 мл
       updated.targetWater = Math.round(weightNum * 33);
     }
     
@@ -1707,9 +2432,15 @@ export default function App() {
         meals,
         waterIntake,
         profile,
-        apiKey,
+        customFoods,
+        customBarcodes,
+        rememberedFoodPortions,
+        apiKey: apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey,
+        openAiApiKey,
+        openAiProxyUrl,
         scanMode,
         geminiModel,
+        openAiModel,
         theme
       };
       
@@ -1760,14 +2491,33 @@ export default function App() {
         if (importedData.profile && typeof importedData.profile === 'object') {
           setProfile(prev => ({ ...prev, ...importedData.profile }));
         }
+        if (Array.isArray(importedData.customFoods)) {
+          setCustomFoods(importedData.customFoods);
+        }
+        if (importedData.customBarcodes && typeof importedData.customBarcodes === 'object') {
+          setCustomBarcodes(importedData.customBarcodes);
+        }
+        if (importedData.rememberedFoodPortions && typeof importedData.rememberedFoodPortions === 'object') {
+          setRememberedFoodPortions(importedData.rememberedFoodPortions);
+        }
         if (importedData.apiKey !== undefined) {
-          setApiKey(importedData.apiKey);
+          const importedApiKey = String(importedData.apiKey || '').trim();
+          setApiKey(importedApiKey || DEFAULT_API_KEY);
+        }
+        if (importedData.openAiApiKey !== undefined) {
+          setOpenAiApiKey(String(importedData.openAiApiKey || '').trim());
+        }
+        if (importedData.openAiProxyUrl !== undefined) {
+          setOpenAiProxyUrl(String(importedData.openAiProxyUrl || '').trim());
         }
         if (importedData.scanMode !== undefined) {
           setScanMode(importedData.scanMode);
         }
         if (importedData.geminiModel !== undefined) {
           setGeminiModel(importedData.geminiModel);
+        }
+        if (importedData.openAiModel !== undefined) {
+          setOpenAiModel(importedData.openAiModel);
         }
         if (importedData.theme !== undefined) {
           setTheme(importedData.theme);
@@ -1784,6 +2534,98 @@ export default function App() {
   };
 
   // Розрахунок прогресу для SVG
+  const importProductDatabase = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (readerEvent) => {
+      try {
+        const rows = rowsFromProductImport(String(readerEvent.target.result || ""), file.name);
+        const importedProducts = rows
+          .map((row, index) => normalizeImportedProduct(row, index))
+          .filter(product => product && hasCompleteNutritionValues(product));
+
+        if (importedProducts.length === 0) {
+          throw new Error("У файлі немає продуктів з назвою та повними КБЖВ.");
+        }
+
+        const productsWithoutBarcode = importedProducts.filter(product => !product.barcode);
+        const productsWithBarcode = importedProducts.filter(product => product.barcode);
+        const existingFoodMap = new Map(customFoods.map(food => [normalizeSearchText(`${food.name} ${food.brand}`), food]));
+        const nextCustomFoods = [...customFoods];
+        let addedFoods = 0;
+        let updatedFoods = 0;
+
+        productsWithoutBarcode.forEach(product => {
+          const key = normalizeSearchText(`${product.name} ${product.brand}`);
+          const existing = existingFoodMap.get(key);
+          if (existing) {
+            const index = nextCustomFoods.findIndex(food => food.id === existing.id);
+            nextCustomFoods[index] = {
+              ...existing,
+              ...product,
+              id: existing.id,
+              createdAt: existing.createdAt || product.createdAt
+            };
+            updatedFoods += 1;
+          } else {
+            const newFood = {
+              ...product,
+              id: `custom-import-${Date.now()}-${addedFoods}`
+            };
+            nextCustomFoods.unshift(newFood);
+            existingFoodMap.set(key, newFood);
+            addedFoods += 1;
+          }
+        });
+
+        const nextCustomBarcodes = { ...customBarcodes };
+        let addedBarcodes = 0;
+        let updatedBarcodes = 0;
+
+        productsWithBarcode.forEach(product => {
+          const existing = nextCustomBarcodes[product.barcode];
+          nextCustomBarcodes[product.barcode] = {
+            ...existing,
+            ...product,
+            id: existing?.id || `barcode-${product.barcode}`,
+            createdAt: existing?.createdAt || product.createdAt
+          };
+          if (existing) updatedBarcodes += 1;
+          else addedBarcodes += 1;
+        });
+
+        setCustomFoods(nextCustomFoods);
+        setCustomBarcodes(nextCustomBarcodes);
+        showToast(`Імпортовано ${addedFoods + addedBarcodes} нових, оновлено ${updatedFoods + updatedBarcodes}.`, "success");
+      } catch (error) {
+        console.error("Product database import error:", error);
+        showToast(`Не вдалося імпортувати базу: ${error.message}`, "error");
+      } finally {
+        event.target.value = "";
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const downloadProductImportTemplate = () => {
+    const csv = [
+      "name,brand,supermarket,category,calories,protein,fat,carbs,weight,barcode,aliases,ingredients,icon",
+      "Молоко 2.5%,Своя Лінія,АТБ,Сніданок,52,2.8,2.5,4.7,100,,молоко;атб,,🥛",
+      "Гречка варена,,,Обід,110,3.6,1.1,21.3,100,,гречана каша,,🍚"
+    ].join("\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "nutrisnap_products_template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const calPercent = Math.min((totals.calories / profile.targetCalories) * 100, 100);
   const radius = 58;
   const circumference = 2 * Math.PI * radius;
@@ -1794,11 +2636,9 @@ export default function App() {
     const counts = {};
     meals.forEach(m => {
       if (!m.name) return;
-      if (!counts[m.name]) {
-        counts[m.name] = { count: 0, meal: m };
-      }
+      if (!counts[m.name]) counts[m.name] = { count: 0, meal: m };
       counts[m.name].count++;
-      counts[m.name].meal = m; // оновлюємо дані останньою стравою
+      counts[m.name].meal = m;
     });
     return Object.values(counts)
       .sort((a, b) => b.count - a.count)
@@ -1815,7 +2655,6 @@ export default function App() {
       const dateStr = getTodayString(d);
       const dayMeals = meals.filter(m => m.date === dateStr);
       const dayCalories = dayMeals.reduce((sum, m) => sum + (Number(m.calories) || 0), 0);
-      const dayProtein = Math.round(dayMeals.reduce((sum, m) => sum + (Number(m.protein) || 0), 10) / 10) * 10;
       const dayWater = waterIntake[dateStr] || 0;
       days.push({
         dateStr,
@@ -1850,7 +2689,7 @@ export default function App() {
       
       {/* --- App Header --- */}
       <header className="app-header">
-        <div className="brand" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div className="brand">
           {activeTab !== 'dashboard' && (
             <button
               onClick={() => {
@@ -1875,22 +2714,12 @@ export default function App() {
               <ChevronLeft size={22} style={{ color: 'var(--color-calories)' }} />
             </button>
           )}
-          <span className="brand-logo">NutriSnap</span>
-          {scanMode === 'gemini' && (
-            <span style={{ 
-              fontSize: '10px', 
-              background: 'rgba(99, 102, 241, 0.15)', 
-              color: '#818cf8', 
-              padding: '2px 6px', 
-              borderRadius: '8px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px',
-              fontWeight: 600
-            }}>
-              <Sparkles size={10} /> ШІ Gemini
+          <div className="brand-identity">
+            <span className="brand-logo">NutriSnap</span>
+            <span className="brand-credit">
+              developed by <strong>Ihor Samchenko</strong>
             </span>
-          )}
+          </div>
         </div>
         <button 
           className="theme-toggle" 
@@ -1948,7 +2777,7 @@ export default function App() {
             <div className="glass-card">
               <div className="dashboard-summary">
                 <div className="circular-progress-container">
-                  <svg className="circular-progress-svg">
+                  <svg className="circular-progress-svg" viewBox="0 0 140 140" aria-label="Прогрес калорій за день">
                     <circle className="progress-bg-circle" cx="70" cy="70" r={radius} />
                     <circle 
                       className="progress-active-circle" 
@@ -2038,13 +2867,12 @@ export default function App() {
               <div className="water-left">
                 <div className="water-icon-box" style={{ overflow: 'visible', position: 'relative' }}>
                   {(() => {
-                    const waterTarget = profile.targetWater || 2000;
-                    const waterPercent = Math.min((currentWater / waterTarget) * 100, 100);
+                    const waterPercent = Math.min((currentWater / 2000) * 100, 100);
                     return (
                       <svg 
                         viewBox="0 0 24 24" 
-                        width="28" 
-                        height="28" 
+                        width="40" 
+                        height="40" 
                         style={{ overflow: 'visible' }}
                         className="water-droplet-svg"
                       >
@@ -2093,7 +2921,13 @@ export default function App() {
                   <h3 className="water-title">Вода</h3>
                   <p className="water-progress">{currentWater} мл / {profile.targetWater || 2000} мл</p>
                 </div>
-              </div>
+                  <div className="water-progress-track" aria-hidden="true">
+                    <div
+                      className="water-progress-fill"
+                      style={{ width: `${Math.min((currentWater / 2000) * 100, 100)}%` }}
+                    ></div>
+                  </div>
+                </div>
               <div className="water-actions">
                 <button 
                   className="btn-water-add" 
@@ -2109,13 +2943,13 @@ export default function App() {
                 >
                   -250
                 </button>
-                <button className="btn-water-add" onClick={() => handleWaterAdd(150)} title="Додати 150мл (кружка espresso)">
+                <button className="btn-water-add" onClick={() => handleWaterAdd(150)} title="Додати 150мл">
                   +150
                 </button>
                 <button className="btn-water-add" onClick={() => handleWaterAdd(250)} title="Додати 250мл">
                   +250
                 </button>
-                <button className="btn-water-add" onClick={() => handleWaterAdd(330)} title="Додати 330мл (бляшанка)">
+                <button className="btn-water-add" onClick={() => handleWaterAdd(330)} title="Додати 330мл">
                   +330
                 </button>
                 <button className="btn-water-add" onClick={() => handleWaterAdd(500)} title="Додати 500мл">
@@ -2148,9 +2982,8 @@ export default function App() {
                           className="btn-fav-add" 
                           onClick={() => {
                             const category = getDefaultCategory();
-                            const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
                             const newMeal = {
-                              id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
+                              id: createMealId(),
                               name: fav.name,
                               calories: Number(fav.calories) || 0,
                               protein: Number(fav.protein) || 0,
@@ -2163,7 +2996,6 @@ export default function App() {
                               originalCarbs: Number(fav.carbs) || 0,
                               originalWeight: Number(fav.weight) || 100,
                               category,
-                              time: mealTimeStr,
                               date: selectedDate,
                               icon: getEmojiForCategory(category),
                               image: fav.image || ''
@@ -2296,16 +3128,6 @@ export default function App() {
                       {catMeals.length === 0 ? (
                         <div className="category-empty-placeholder">
                           <span>Немає страв</span>
-                          <span 
-                            className="category-quick-add-link"
-                            onClick={() => {
-                              setPreselectedCategory(cat.name);
-                              setScannerMode('search');
-                              changeTab('scanner');
-                            }}
-                          >
-                            + Додати
-                          </span>
                         </div>
                       ) : (
                         <div className="category-meals-list">
@@ -2315,7 +3137,6 @@ export default function App() {
                                 <div className="meal-text">
                                   <span className="meal-name" style={{ fontSize: '14px', fontWeight: 600 }}>{meal.name}</span>
                                   <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                                    <span>{meal.time} •</span>
                                     <input 
                                       type="number"
                                       value={meal.weight}
@@ -2330,37 +3151,56 @@ export default function App() {
                               </div>
                               <div className="meal-calories-details">
                                 <span className="meal-kcal">{meal.calories} ккал</span>
-                                <span className="meal-macros" style={{ display: 'flex', alignItems: 'center', gap: '3px', flexWrap: 'wrap', marginTop: '3px' }}>
-                                  <span>Б:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.protein}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г Ж:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.fat}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г В:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.carbs}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г</span>
-                                </span>
+                                <div className="meal-macros">
+                                  <label className="meal-macro-edit-field">
+                                    <span>Білки</span>
+                                    <input
+                                      type="number"
+                                      value={meal.protein}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати білки"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                  <label className="meal-macro-edit-field">
+                                    <span>Жири</span>
+                                    <input
+                                      type="number"
+                                      value={meal.fat}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати жири"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                  <label className="meal-macro-edit-field">
+                                    <span>Вугл.</span>
+                                    <input
+                                      type="number"
+                                      value={meal.carbs}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати вуглеводи"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                </div>
                               </div>
+                              <button
+                                className="meal-repeat-btn"
+                                onClick={() => repeatMeal(meal)}
+                                title="Додати ще раз"
+                                aria-label={`Додати "${meal.name}" ще раз`}
+                              >
+                                <Plus size={16} />
+                              </button>
                               <button 
                                 className={`meal-favorite-btn ${isFavorite(meal.name) ? 'active' : ''}`} 
                                 onClick={() => toggleFavoriteMeal(meal)} 
@@ -2480,7 +3320,7 @@ export default function App() {
                         NutriSnap Фотосканер
                       </h3>
                       <p style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '280px', marginBottom: '24px', lineHeight: '1.6' }}>
-                        Сфотогравуйте страву на камеру телефону або оберіть зображення з галереї для миттєвого розрахунку калорій та КБЖВ.
+                        Фото ШІ може помилятися або впиратися в квоти. Для точного запису відкрийте ручне внесення КБЖВ з етикетки.
                       </p>
                       
                       {cameraError && (
@@ -2493,7 +3333,7 @@ export default function App() {
                         className="btn-primary" 
                         onClick={() => {
                           if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
-                            cameraFileInputRef.current?.click();
+                            setCameraRequested(true);
                           }
                         }}
                         style={{ 
@@ -2516,7 +3356,29 @@ export default function App() {
                         }}
                       >
                         <Camera size={20} />
-                        <span>Сфотогравувати їжу</span>
+                        <span>Увімкнути камеру</span>
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => {
+                          if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
+                            cameraFileInputRef.current?.click();
+                          }
+                        }}
+                        disabled={!allowCameraTrigger}
+                        style={{ width: '100%', maxWidth: '260px', marginTop: '10px', justifyContent: 'center' }}
+                      >
+                        <Upload size={18} />
+                        <span>Завантажити фото</span>
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => openCustomFoodForm({ weight: 100 })}
+                        disabled={!allowCameraTrigger}
+                        style={{ width: '100%', maxWidth: '260px', marginTop: '10px', justifyContent: 'center' }}
+                      >
+                        <Plus size={18} />
+                        <span>Внести КБЖВ вручну</span>
                       </button>
                       <input 
                         ref={cameraFileInputRef}
@@ -2583,12 +3445,36 @@ export default function App() {
                       <div className="results-header" style={{ marginBottom: '8px' }}>
                         <div>
                           <span className="match-badge">
-                            Точність розпізнавання: {scanResult.confidence}%
+                            {scanResult.dataQuality === "label_read"
+                              ? "КБЖВ зчитано з етикетки"
+                              : scanResult.dataQuality === "database_match"
+                                ? "КБЖВ з локальної бази"
+                                : `Оцінка ШІ: ${scanResult.confidence || 0}% впевненості`}
                           </span>
                           <h2 className="dish-title">{scanResult.name}</h2>
                         </div>
                         <span style={{ fontSize: '28px' }}>🥗</span>
                       </div>
+
+                      {scanResult.dataQuality !== "label_read" && (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                          padding: '10px 12px',
+                          marginBottom: '12px',
+                          borderRadius: '12px',
+                          background: 'rgba(245, 158, 11, 0.12)',
+                          border: '1px solid rgba(245, 158, 11, 0.25)',
+                          color: '#fbbf24',
+                          fontSize: '12px',
+                          lineHeight: 1.4,
+                          textAlign: 'left'
+                        }}>
+                          <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
+                          <span>{scanResult.warning || "Це приблизна оцінка з фото, не точні дані з етикетки. Перед додаванням перевірте вагу та КБЖВ."}</span>
+                        </div>
+                      )}
 
                       <div className="results-macros-grid">
                         <div className="results-macro-box box-kcal">
@@ -2672,6 +3558,14 @@ export default function App() {
                         </div>
                       </div>
 
+                      <QuickPortionButtons
+                        baseWeight={scanResult.weight || editedWeight}
+                        name={scanResult.name}
+                        currentWeight={editedWeight}
+                        preferredWeight={getRememberedFoodPortion(scanResult)}
+                        onSelect={handleScanWeightChange}
+                      />
+
                       <div className="detail-row">
                         <span className="detail-label">Інгредієнти:</span>
                         <span className="detail-value">{scanResult.ingredients || "Не визначено"}</span>
@@ -2728,7 +3622,7 @@ export default function App() {
                         NutriSnap Сканер штрих-кодів
                       </h3>
                       <p style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '280px', marginBottom: '24px', lineHeight: '1.6' }}>
-                        Сфотогравуйте штрих-код продукту або завантажте його з галереї для автоматичного розпізнавання продукту.
+                        Увімкніть камеру або завантажте фото штрих-коду для автоматичного розпізнавання продукту.
                       </p>
                       
                       {cameraError && (
@@ -2741,7 +3635,7 @@ export default function App() {
                         className="btn-primary" 
                         onClick={() => {
                           if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
-                            barcodeFileInputRef.current?.click();
+                            setCameraRequested(true);
                           }
                         }}
                         style={{ 
@@ -2764,7 +3658,20 @@ export default function App() {
                         }}
                       >
                         <Camera size={20} />
-                        <span>Сфотогравувати штрих-код</span>
+                        <span>Увімкнути камеру</span>
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => {
+                          if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
+                            barcodeFileInputRef.current?.click();
+                          }
+                        }}
+                        disabled={!allowCameraTrigger}
+                        style={{ width: '100%', maxWidth: '260px', marginTop: '10px', justifyContent: 'center' }}
+                      >
+                        <Upload size={18} />
+                        <span>Завантажити фото</span>
                       </button>
                       <input 
                         ref={barcodeFileInputRef}
@@ -2844,9 +3751,32 @@ export default function App() {
                           <div>
                             <span className="match-badge">Знайдено за штрих-кодом</span>
                             <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px' }}>{barcodeResult.name}</h2>
+                            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
+                              Джерело: {barcodeResult.sourceLabel || barcodeResult.source || "база продуктів"}
+                            </div>
                           </div>
                         </div>
                       </div>
+
+                      {barcodeResult.source === "openfoodfacts" && (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                          padding: '10px 12px',
+                          marginBottom: '12px',
+                          borderRadius: '12px',
+                          background: 'rgba(59, 130, 246, 0.12)',
+                          border: '1px solid rgba(59, 130, 246, 0.25)',
+                          color: '#93c5fd',
+                          fontSize: '12px',
+                          lineHeight: 1.4,
+                          textAlign: 'left'
+                        }}>
+                          <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
+                          <span>Дані взято з Open Food Facts. Додаток показує їх тільки якщо в базі є повний набір КБЖВ, але етикетка продукту все одно є головним джерелом правди.</span>
+                        </div>
+                      )}
 
                       <div className="results-macros-grid">
                         <div className="results-macro-box box-kcal">
@@ -2930,6 +3860,14 @@ export default function App() {
                         </div>
                       </div>
 
+                      <QuickPortionButtons
+                        baseWeight={barcodeResult.weight || 100}
+                        name={barcodeResult.name}
+                        currentWeight={barcodeEditedWeight}
+                        preferredWeight={getRememberedFoodPortion(barcodeResult)}
+                        onSelect={handleBarcodeWeightChange}
+                      />
+
                       {barcodeResult.ingredients && (
                         <div className="detail-row">
                           <span className="detail-label">Склад продукту:</span>
@@ -2985,6 +3923,7 @@ export default function App() {
                       <button 
                         onClick={() => {
                           setBarcodeNotFound(null);
+                          setBarcodeCandidateProduct(null);
                           setBarcodeInput('');
                           setBarcodeError(null);
                         }}
@@ -3010,35 +3949,50 @@ export default function App() {
                       </button>
                       <div className="results-header" style={{ marginBottom: '8px' }}>
                         <div className="barcode-product-info" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                          <div className="barcode-product-image" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', width: '56px', height: '56px', borderRadius: '12px' }}>
-                            <AlertCircle size={28} />
-                          </div>
+                          {barcodeCandidateProduct?.image ? (
+                            <img src={barcodeCandidateProduct.image} alt={barcodeCandidateProduct.name} className="barcode-product-image" style={{ width: '56px', height: '56px', borderRadius: '12px', objectFit: 'cover' }} />
+                          ) : (
+                            <div className="barcode-product-image" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', width: '56px', height: '56px', borderRadius: '12px' }}>
+                              <AlertCircle size={28} />
+                            </div>
+                          )}
                           <div style={{ textAlign: 'left' }}>
-                            <span className="match-badge" style={{ background: '#ef4444', color: '#fff' }}>Невідомий штрих-код</span>
-                            <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px', color: '#f1f5f9' }}>{barcodeNotFound}</h2>
+                            <span className="match-badge" style={{ background: '#ef4444', color: '#fff' }}>
+                              {barcodeCandidateProduct ? "Потрібне підтвердження" : "Невідомий штрих-код"}
+                            </span>
+                            <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px', color: '#f1f5f9' }}>
+                              {barcodeCandidateProduct?.name || barcodeNotFound}
+                            </h2>
+                            {barcodeCandidateProduct && (
+                              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
+                                Код: {barcodeNotFound} • Джерело: {barcodeCandidateProduct.sourceLabel || "зовнішня база"}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
                       
                       <p style={{ fontSize: '13px', color: 'var(--text-dark-muted)', marginBottom: '16px', lineHeight: '1.4', textAlign: 'left' }}>
-                        Цього продукту ще немає в нашій базі даних. Ви можете легко внести його назву та КБЖВ на 100 г, щоб додаток автоматично розраховував калорійність та зберігав продукт для майбутнього використання.
+                        {barcodeCandidateProduct
+                          ? "Товар знайдено у зовнішній базі, але КБЖВ звідти можуть бути неправильними. Щоб не обманювати користувача, додаток не підставляє ці числа автоматично. Внесіть значення з етикетки, і цей штрих-код буде збережено як перевірений."
+                          : "Цього продукту ще немає в нашій перевіреній базі даних. Ви можете внести назву та КБЖВ з етикетки на 100 г, щоб додаток надалі автоматично розраховував калорійність."}
                       </p>
 
                       <button 
                         className="btn-primary" 
                         style={{ width: '100%' }} 
                         onClick={() => {
-                          setFallbackName('');
+                          setFallbackName(barcodeCandidateProduct?.name || '');
                           setFallbackCalories('');
                           setFallbackProtein('');
                           setFallbackFat('');
                           setFallbackCarbs('');
-                          setFallbackWeight('100');
+                          setFallbackWeight(barcodeCandidateProduct?.weight ? String(barcodeCandidateProduct.weight) : '100');
                           setIsBarcodeNotFoundModalOpen(true);
                         }}
                       >
                         <Plus size={18} />
-                        Додати продукт в базу
+                        Ввести КБЖВ з етикетки
                       </button>
                     </div>
                   )}
@@ -3060,6 +4014,7 @@ export default function App() {
                       setCustomFoodFat('');
                       setCustomFoodCarbs('');
                       setCustomFoodWeight('100');
+                      setCustomFoodEditTarget(null);
                       setIsCustomFoodModalOpen(true);
                     }}
                   >
@@ -3072,7 +4027,7 @@ export default function App() {
                   <input
                     type="text"
                     className="search-input-field"
-                    placeholder="Пошук страв та продуктів (напр. Хліб, Борщ...)"
+                    placeholder="Пошук продуктів і супермаркетів (напр. Молоко АТБ, Йогурт Сільпо...)"
                     value={searchQuery}
                     onChange={(e) => {
                       setSearchQuery(e.target.value);
@@ -3091,14 +4046,7 @@ export default function App() {
 
                   {/* Autocomplete Suggestions Dropdown */}
                   {(() => {
-                    if (searchQuery.length === 0 || !showSuggestions) return null;
-                    
-                    const suggestions = combinedFoods.filter(food => 
-                      food.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      (food.brand && food.brand.toLowerCase().includes(searchQuery.toLowerCase()))
-                    ).slice(0, 6);
-
-                    if (suggestions.length === 0) return null;
+                    if (searchSuggestions.length === 0) return null;
 
                     return (
                       <div className="autocomplete-dropdown" style={{
@@ -3114,13 +4062,12 @@ export default function App() {
                         maxHeight: '220px',
                         overflowY: 'auto'
                       }}>
-                        {suggestions.map(food => (
+                        {searchSuggestions.map(food => (
                           <div
                             key={food.id}
                             className="autocomplete-item"
                             onClick={() => {
-                              setSelectedSearchFood(food);
-                              setSearchFoodWeight(food.weight); // default to its base weight
+                              selectSearchFood(food);
                               setSearchQuery(''); // clear query so dropdown disappears
                               setShowSuggestions(false);
                             }}
@@ -3193,7 +4140,7 @@ export default function App() {
 
                 {/* Filter Chips */}
                 <div className="filter-chips-container">
-                  {['Усі', 'Супермаркети', 'Страви', 'Обрані', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
+                  {['Усі', 'Моя база', 'Часті', 'Супермаркети', 'Страви', 'Обрані', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
                     <button
                       key={filter}
                       className={`filter-chip ${selectedCategoryFilter === filter ? 'active' : ''}`}
@@ -3209,7 +4156,7 @@ export default function App() {
                   {isSearchingExternal && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', fontSize: '13px', color: 'var(--color-accent)' }}>
                       <RefreshCw className="spin" size={14} />
-                      <span>Шукаємо в базі Open Food Facts...</span>
+                      <span>Шукаємо в українській базі продуктів...</span>
                     </div>
                   )}
 
@@ -3233,6 +4180,7 @@ export default function App() {
                           setCustomFoodFat('');
                           setCustomFoodCarbs('');
                           setCustomFoodWeight('100');
+                          setCustomFoodEditTarget(null);
                           setIsCustomFoodModalOpen(true);
                         }}
                       >
@@ -3248,19 +4196,51 @@ export default function App() {
                           key={food.id}
                           className="search-food-item"
                           onClick={() => {
-                            setSelectedSearchFood(food);
-                            setSearchFoodWeight(food.weight);
+                            selectSearchFood(food);
                           }}
                         >
                           <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🥗'}</span>
                           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
-                            <span style={{ fontWeight: 600, fontSize: '14px', color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' }}>
+                            <span
+                              onClick={(event) => {
+                                if (food.isCustom || food.isCustomBarcode) {
+                                  event.stopPropagation();
+                                  openCustomFoodEditor(food);
+                                }
+                              }}
+                              title={food.isCustom || food.isCustomBarcode ? "Редагувати КБЖВ" : undefined}
+                              style={{
+                                fontWeight: 600,
+                                fontSize: '14px',
+                                color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)',
+                                cursor: food.isCustom || food.isCustomBarcode ? 'pointer' : 'default'
+                              }}
+                            >
                               {food.name}
                             </span>
                             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
                               {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
                             </span>
                           </div>
+                          {(food.isCustom || food.isCustomBarcode) && (
+                            <button
+                              type="button"
+                              className="search-edit-btn"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openCustomFoodEditor(food);
+                              }}
+                              title="Редагувати КБЖВ"
+                              aria-label="Редагувати КБЖВ"
+                            >
+                              <Pencil size={15} />
+                            </button>
+                          )}
+                          {getFoodUsageCount(food) > 0 && (
+                            <span className="search-brand-badge search-usage-badge">
+                              {getFoodUsageCount(food)}x
+                            </span>
+                          )}
                           {food.brand && <span className="search-brand-badge">{food.brand}</span>}
                         </div>
                       ))}
@@ -3296,8 +4276,14 @@ export default function App() {
                             className="search-food-item"
                             style={{ borderLeft: `4px solid ${borderCol}` }}
                             onClick={() => {
-                              setSelectedSearchFood(food);
-                              setSearchFoodWeight(food.weight);
+                              setCustomFoodName(food.name);
+                              setCustomFoodCalories('');
+                              setCustomFoodProtein('');
+                              setCustomFoodFat('');
+                              setCustomFoodCarbs('');
+                              setCustomFoodWeight(food.weight || '100');
+                              setCustomFoodEditTarget(null);
+                              setIsCustomFoodModalOpen(true);
                             }}
                           >
                             <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🔮'}</span>
@@ -3306,7 +4292,7 @@ export default function App() {
                                 {food.name}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                                {food.brand ? `${food.brand} • ` : ''}ШІ-підказка назви, КБЖВ внесіть вручну
                               </span>
                             </div>
                             <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket || "ШІ"}</span>
@@ -3321,8 +4307,14 @@ export default function App() {
                           className="search-food-item"
                           style={{ borderLeft: '3px solid var(--color-water)' }}
                           onClick={() => {
-                            setSelectedSearchFood(food);
-                            setSearchFoodWeight(food.weight);
+                            setCustomFoodName(food.name);
+                            setCustomFoodCalories('');
+                            setCustomFoodProtein('');
+                            setCustomFoodFat('');
+                            setCustomFoodCarbs('');
+                            setCustomFoodWeight(food.weight || '100');
+                            setCustomFoodEditTarget(null);
+                            setIsCustomFoodModalOpen(true);
                           }}
                         >
                           <span style={{ fontSize: '24px', marginRight: '8px' }}>🛒</span>
@@ -3331,10 +4323,10 @@ export default function App() {
                               {food.name}
                             </span>
                             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                              {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                              {food.brand ? `${food.brand} • ` : ''}Зовнішня база: КБЖВ підтвердіть з етикетки
                             </span>
                           </div>
-                          <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>База OFF</span>
+                          <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>{food.sourceLabel || "База OFF"}</span>
                         </div>
                       ))}
                     </>
@@ -3371,7 +4363,22 @@ export default function App() {
                         <div style={{ fontSize: '36px' }}>{selectedSearchFood.icon || '🥗'}</div>
                         <div style={{ textAlign: 'left' }}>
                           {selectedSearchFood.brand && <span className="match-badge">{selectedSearchFood.brand}</span>}
-                          <h2 className="dish-title" style={{ fontSize: '18px', marginTop: '2px' }}>{selectedSearchFood.name}</h2>
+                          <h2
+                            className="dish-title"
+                            onClick={() => {
+                              if (selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode) {
+                                openCustomFoodEditor(selectedSearchFood);
+                              }
+                            }}
+                            title={selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode ? "Редагувати КБЖВ" : undefined}
+                            style={{
+                              fontSize: '18px',
+                              marginTop: '2px',
+                              cursor: selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode ? 'pointer' : 'default'
+                            }}
+                          >
+                            {selectedSearchFood.name}
+                          </h2>
                         </div>
                       </div>
                     </div>
@@ -3443,6 +4450,14 @@ export default function App() {
                             </div>
                           </div>
 
+                          <QuickPortionButtons
+                            baseWeight={selectedSearchFood.weight || 100}
+                            name={selectedSearchFood.name}
+                            currentWeight={searchFoodWeight}
+                            preferredWeight={getRememberedFoodPortion(selectedSearchFood)}
+                            onSelect={setSearchFoodWeight}
+                          />
+
                           {selectedSearchFood.ingredients && (
                             <div className="detail-row" style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
                               <span className="detail-label">Склад продукту:</span>
@@ -3458,6 +4473,17 @@ export default function App() {
                                 <Check size={18} />
                                 Додати до щоденника
                               </button>
+                              {(selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode) && (
+                                <button
+                                  className="btn-secondary"
+                                  onClick={() => openCustomFoodEditor(selectedSearchFood)}
+                                  style={{ width: '46px', height: '46px', padding: 0, justifyContent: 'center' }}
+                                  title="Редагувати КБЖВ"
+                                  aria-label="Редагувати КБЖВ"
+                                >
+                                  <Pencil size={18} />
+                                </button>
+                              )}
                               <button 
                                 className={`btn-favorite-toggle ${isFavorite(selectedSearchFood.name) ? 'active' : ''}`}
                                 onClick={() => toggleFavoriteMeal(selectedSearchFood)}
@@ -3783,7 +4809,8 @@ export default function App() {
                             className="category-add-btn" 
                             onClick={() => {
                               setPreselectedCategory(cat.name);
-                              setActiveTab('scanner');
+                              setScannerMode('search');
+                              changeTab('scanner');
                             }}
                             title={`Додати до: ${cat.name}`}
                           >
@@ -3795,15 +4822,6 @@ export default function App() {
                       {catMeals.length === 0 ? (
                         <div className="category-empty-placeholder">
                           <span>Немає страв</span>
-                          <span 
-                            className="category-quick-add-link"
-                            onClick={() => {
-                              setPreselectedCategory(cat.name);
-                              setActiveTab('scanner');
-                            }}
-                          >
-                            + Додати
-                          </span>
                         </div>
                       ) : (
                         <div className="category-meals-list">
@@ -3813,7 +4831,6 @@ export default function App() {
                                 <div className="meal-text">
                                   <span className="meal-name" style={{ fontSize: '14px', fontWeight: 600 }}>{meal.name}</span>
                                   <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                                    <span>{meal.time} •</span>
                                     <input 
                                       type="number"
                                       value={meal.weight}
@@ -3828,37 +4845,56 @@ export default function App() {
                               </div>
                               <div className="meal-calories-details">
                                 <span className="meal-kcal">{meal.calories} ккал</span>
-                                <span className="meal-macros" style={{ display: 'flex', alignItems: 'center', gap: '3px', flexWrap: 'wrap', marginTop: '3px' }}>
-                                  <span>Б:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.protein}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г Ж:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.fat}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г В:</span>
-                                  <input 
-                                    type="number"
-                                    value={meal.carbs}
-                                    onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
-                                    className="meal-macro-inline-input"
-                                    min="0"
-                                    step="0.1"
-                                  />
-                                  <span>г</span>
-                                </span>
+                                <div className="meal-macros">
+                                  <label className="meal-macro-edit-field">
+                                    <span>Білки</span>
+                                    <input
+                                      type="number"
+                                      value={meal.protein}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'protein', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати білки"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                  <label className="meal-macro-edit-field">
+                                    <span>Жири</span>
+                                    <input
+                                      type="number"
+                                      value={meal.fat}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'fat', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати жири"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                  <label className="meal-macro-edit-field">
+                                    <span>Вугл.</span>
+                                    <input
+                                      type="number"
+                                      value={meal.carbs}
+                                      onChange={(e) => handleUpdateMealMacro(meal.id, 'carbs', e.target.value)}
+                                      className="meal-macro-inline-input"
+                                      min="0"
+                                      step="0.1"
+                                      aria-label="Редагувати вуглеводи"
+                                    />
+                                    <span>г</span>
+                                  </label>
+                                </div>
                               </div>
+                              <button
+                                className="meal-repeat-btn"
+                                onClick={() => repeatMeal(meal)}
+                                title="Додати ще раз"
+                                aria-label={`Додати "${meal.name}" ще раз`}
+                              >
+                                <Plus size={16} />
+                              </button>
                               <button 
                                 className={`meal-favorite-btn ${isFavorite(meal.name) ? 'active' : ''}`} 
                                 onClick={() => toggleFavoriteMeal(meal)} 
@@ -3900,28 +4936,6 @@ export default function App() {
           <div>
             <h2 className="section-title">Профіль користувача</h2>
             
-            {/* BMR/TDEE Info Card */}
-            {profile.bmr && (
-              <div className="glass-card" style={{ marginBottom: '12px', background: 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(16,185,129,0.05) 100%)' }}>
-                <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <TrendingUp size={16} style={{ color: 'var(--color-accent)' }} />
-                  Розрахований метаболізм (BMR/TDEE)
-                </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <div className="bmr-pill">
-                    <span className="bmr-pill-label">BMR (базовий)</span>
-                    <span className="bmr-pill-val">{profile.bmr} ккал</span>
-                    <span className="bmr-pill-desc">У спокої</span>
-                  </div>
-                  <div className="bmr-pill bmr-pill-tdee">
-                    <span className="bmr-pill-label">TDEE (з активністю)</span>
-                    <span className="bmr-pill-val">{profile.tdee} ккал</span>
-                    <span className="bmr-pill-desc">Ваша норма</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {/* Profile Calculations Card */}
             <div className="glass-card">
               <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -3951,45 +4965,6 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="profile-grid-2col">
-                  <div className="settings-row">
-                    <span className="settings-label">Вік (років):</span>
-                    <input 
-                      type="number"
-                      className="settings-input"
-                      value={profile.age || 25}
-                      min="10" max="120"
-                      onChange={(e) => handleProfileChange('age', e.target.value)}
-                    />
-                  </div>
-                  <div className="settings-row">
-                    <span className="settings-label">Стать:</span>
-                    <select 
-                      className="settings-input settings-select"
-                      value={profile.gender || 'male'}
-                      onChange={(e) => handleProfileChange('gender', e.target.value)}
-                    >
-                      <option value="male">Чоловік</option>
-                      <option value="female">Жінка</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="settings-row">
-                  <span className="settings-label">Рівень активності:</span>
-                  <select 
-                    className="settings-input settings-select"
-                    value={profile.activityLevel || 'moderate'}
-                    onChange={(e) => handleProfileChange('activityLevel', e.target.value)}
-                  >
-                    <option value="sedentary">Сидячий (без тренувань)</option>
-                    <option value="light">Легка активність (1-2 рази/тижд.)</option>
-                    <option value="moderate">Помірна активність (3-5 разів/тижд.)</option>
-                    <option value="active">Висока активність (6-7 разів/тижд.)</option>
-                    <option value="veryActive">Дуже висока (двічі на день)</option>
-                  </select>
-                </div>
-
                 <div className="settings-row">
                   <span className="settings-label">Ваша фітнес-ціль:</span>
                   <select 
@@ -3997,21 +4972,10 @@ export default function App() {
                     value={profile.goal}
                     onChange={(e) => handleProfileChange('goal', e.target.value)}
                   >
-                    <option value="lose">Схуднення (-20% від TDEE)</option>
-                    <option value="maintain">Підтримка ваги (= TDEE)</option>
-                    <option value="gain">Набір маси (+15% від TDEE)</option>
+                    <option value="lose">Схуднення (Дефіцит)</option>
+                    <option value="maintain">Підтримка ваги (Баланс)</option>
+                    <option value="gain">Набір маси (Профіцит)</option>
                   </select>
-                </div>
-
-                <div className="settings-row">
-                  <span className="settings-label">Ціль по воді (мл):</span>
-                  <input 
-                    type="number"
-                    className="settings-input"
-                    value={profile.targetWater || 2000}
-                    min="500" max="6000" step="50"
-                    onChange={(e) => setProfile(prev => ({ ...prev, targetWater: Math.max(500, Number(e.target.value) || 2000) }))}
-                  />
                 </div>
 
                 <div style={{ borderTop: '1px solid var(--border-dark)', paddingTop: '14px', marginTop: '4px' }}>
@@ -4139,6 +5103,116 @@ export default function App() {
         {/* ========================================================================= */}
         {/* 5. SETTINGS TAB */}
         {/* ========================================================================= */}
+        {/* ========================================================================= */}
+        {/* ANALYTICS TAB */}
+        {/* ========================================================================= */}
+        {activeTab === 'analytics' && (
+          <div>
+            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <BarChart2 size={20} style={{ color: 'var(--color-accent)' }} />
+              Аналітика за 7 днів
+            </h2>
+
+            <div className="glass-card analytics-chart-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '14px', fontWeight: 600 }}>Калорії по днях</h3>
+                <span style={{ fontSize: '11px', color: 'var(--text-dark-muted)' }}>Ціль: {profile.targetCalories} ккал</span>
+              </div>
+              <div className="analytics-bars-container">
+                {weeklyAnalytics.map((day, i) => {
+                  const maxVal = Math.max(...weeklyAnalytics.map(d => Math.max(d.calories, profile.targetCalories)));
+                  const barHeight = day.calories > 0 ? Math.max((day.calories / maxVal) * 100, 4) : 0;
+                  const isOver = day.calories > profile.targetCalories;
+                  return (
+                    <div key={i} className={`analytics-bar-col ${day.isToday ? 'today' : ''}`}>
+                      <div className="analytics-bar-val">{day.calories > 0 ? day.calories : ''}</div>
+                      <div className="analytics-bar-track">
+                        <div className="analytics-goal-line" style={{ bottom: `${Math.min((profile.targetCalories / maxVal) * 100, 100)}%` }} />
+                        <div className={`analytics-bar-fill ${isOver ? 'over-goal' : ''}`} style={{ height: `${barHeight}%` }} />
+                      </div>
+                      <div className="analytics-bar-label">{day.label}</div>
+                      <div className="analytics-bar-day">{day.dayNum}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="analytics-legend">
+                <span className="legend-item"><span className="legend-dot" style={{ background: 'var(--color-accent)' }}></span>Калорії</span>
+                <span className="legend-item"><span className="legend-line"></span>Ціль</span>
+                <span className="legend-item"><span className="legend-dot" style={{ background: '#f87171' }}></span>Перевищення</span>
+              </div>
+            </div>
+
+            <div className="glass-card" style={{ marginTop: '12px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '14px' }}>Середні показники за тиждень</h3>
+              {(() => {
+                const activeDays = weeklyAnalytics.filter(d => d.calories > 0);
+                const avgCals = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.calories, 0) / activeDays.length) : 0;
+                const avgProtein = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.protein, 0) / activeDays.length * 10) / 10 : 0;
+                const avgWater = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.water, 0) / activeDays.length) : 0;
+                const loggedDays = activeDays.length;
+                return (
+                  <div className="analytics-stats-grid">
+                    <div className="analytics-stat-card">
+                      <div className="analytics-stat-val" style={{ color: 'var(--color-calories)' }}>{avgCals}</div>
+                      <div className="analytics-stat-label">ккал/день</div>
+                      <div className="analytics-stat-sub">{avgCals > 0 ? `${Math.round((avgCals/profile.targetCalories)*100)}% від цілі` : '–'}</div>
+                    </div>
+                    <div className="analytics-stat-card">
+                      <div className="analytics-stat-val" style={{ color: 'var(--color-protein)' }}>{avgProtein}г</div>
+                      <div className="analytics-stat-label">білки/день</div>
+                      <div className="analytics-stat-sub">{avgProtein > 0 ? `${Math.round((avgProtein/profile.targetProtein)*100)}% від цілі` : '–'}</div>
+                    </div>
+                    <div className="analytics-stat-card">
+                      <div className="analytics-stat-val" style={{ color: '#3b82f6' }}>{avgWater}</div>
+                      <div className="analytics-stat-label">мл води/день</div>
+                      <div className="analytics-stat-sub">{avgWater > 0 ? `${Math.round((avgWater/(profile.targetWater||2000))*100)}% від цілі` : '–'}</div>
+                    </div>
+                    <div className="analytics-stat-card">
+                      <div className="analytics-stat-val" style={{ color: '#f59e0b' }}>{loggedDays}/7</div>
+                      <div className="analytics-stat-label">днів у щоденнику</div>
+                      <div className="analytics-stat-sub">{loggedDays === 7 ? '🔥 Ідеально!' : loggedDays >= 5 ? '👍 Добре!' : 'Продовжуй!'}</div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="glass-card" style={{ marginTop: '12px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '14px' }}>Виконання цілі по днях</h3>
+              <div className="heatmap-container">
+                {weeklyAnalytics.map((day, i) => (
+                  <div key={i} className="heatmap-day" onClick={() => { setSelectedDate(day.dateStr); setActiveTab('dashboard'); }}>
+                    <div
+                      className="heatmap-cell"
+                      style={{
+                        background: day.calories === 0
+                          ? 'rgba(255,255,255,0.04)'
+                          : day.goalPercent >= 90 && day.goalPercent <= 110
+                          ? 'rgba(16,185,129,0.7)'
+                          : day.goalPercent > 110
+                          ? 'rgba(239,68,68,0.6)'
+                          : `rgba(16,185,129,${day.goalPercent / 100 * 0.6 + 0.1})`,
+                        border: day.isToday ? '2px solid var(--color-accent)' : '2px solid transparent'
+                      }}
+                      title={`${day.goalPercent}% від цілі (${day.calories} ккал)`}
+                    >
+                      {day.goalPercent > 0 && <span style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>{day.goalPercent}%</span>}
+                    </div>
+                    <div className="heatmap-label">{day.label}</div>
+                    <div className="heatmap-day-num">{day.dayNum}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: '10px', display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-dark-muted)' }}>
+                <span>🟩 90–110% = В нормі</span>
+                <span>🟥 &gt;110% = Перевищення</span>
+                <span>🟦 &lt;90% = Недобір</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'settings' && (
           <div>
             <h2 className="section-title">Налаштування додатку</h2>
@@ -4159,6 +5233,7 @@ export default function App() {
                     onChange={(e) => setScanMode(e.target.value)}
                   >
                     <option value="mock">Симуляція (Локальна база страв)</option>
+                    <option value="openai">GPT (OpenAI API) - сканування їжі</option>
                     <option value="gemini">Реальний ШІ (Gemini API)</option>
                   </select>
                 </div>
@@ -4195,11 +5270,11 @@ export default function App() {
                         type="password"
                         className="settings-input"
                         placeholder="AIzaSy..."
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
+                        value={apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey}
+                        onChange={(e) => setApiKey(e.target.value.trim() ? e.target.value : DEFAULT_API_KEY)}
                       />
                       <span className="settings-info-text">
-                        Ваш API-ключ зберігається локально на вашому пристрої у безпечному сховищі браузера та надсилається лише напряму до Google API.
+                        Ваш API-ключ зберігається локально у браузері на цьому пристрої та надсилається лише напряму до Google API. Не вводьте ключ на спільних пристроях.
                       </span>
                       {(!apiKey || apiKey.trim() === '') && (
                         <div style={{
@@ -4250,6 +5325,186 @@ export default function App() {
                     </div>
                   </>
                 )}
+
+                {scanMode === 'openai' && (
+                  <>
+                    <div className="settings-row" style={{ animation: 'slide-up-sheet 0.2s ease-out' }}>
+                      <span className="settings-label">Модель OpenAI:</span>
+                      <select
+                        className="settings-input settings-select"
+                        value={openAiModel}
+                        onChange={(e) => setOpenAiModel(e.target.value)}
+                      >
+                        <option value="gpt-5.5">GPT-5.5 (Точніше)</option>
+                        <option value="gpt-4.1-mini">GPT-4.1 Mini (Швидше)</option>
+                      </select>
+                    </div>
+
+                    <div className="settings-row" style={{ animation: 'slide-up-sheet 0.2s ease-out' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="settings-label" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Key size={14} /> OpenAI API Ключ:
+                        </span>
+                        <a
+                          href="https://platform.openai.com/api-keys"
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: '11px', color: 'var(--color-protein)', textDecoration: 'none' }}
+                        >
+                          Отримати ключ
+                        </a>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-input"
+                        placeholder="sk-..."
+                        value={openAiApiKey}
+                        onChange={(e) => setOpenAiApiKey(e.target.value)}
+                      />
+                      <input
+                        type="url"
+                        className="settings-input"
+                        placeholder="Proxy URL, наприклад https://your-worker.workers.dev/api/openai/responses"
+                        value={openAiProxyUrl}
+                        onChange={(e) => setOpenAiProxyUrl(e.target.value)}
+                        style={{ marginTop: '8px' }}
+                      />
+                      <span className="settings-info-text">
+                        Якщо вказати proxy endpoint, OpenAI API-ключ у браузері не потрібен. Без proxy ключ зберігається локально у браузері на цьому пристрої.
+                      </span>
+                      {(!openAiApiKey || openAiApiKey.trim() === '') && (!openAiProxyUrl || openAiProxyUrl.trim() === '') && (
+                        <div style={{
+                          marginTop: '8px',
+                          padding: '10px',
+                          borderRadius: '8px',
+                          background: 'rgba(245, 158, 11, 0.1)',
+                          border: '1px solid rgba(245, 158, 11, 0.2)',
+                          color: '#fbbf24',
+                          fontSize: '12px',
+                          lineHeight: '1.4'
+                        }}>
+                          <strong>Потрібен доступ:</strong> для GPT-сканування введіть OpenAI API-ключ або proxy endpoint.
+                          <div style={{ marginTop: '8px' }}>
+                            <button
+                              type="button"
+                              style={{
+                                width: '100%',
+                                padding: '6px 12px',
+                                fontSize: '11px',
+                                background: 'rgba(255, 255, 255, 0.1)',
+                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                color: '#fff',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontWeight: '600',
+                                transition: 'all 0.2s'
+                              }}
+                              onClick={() => {
+                                setScanMode('mock');
+                                localStorage.setItem('nutrisnap_scanmode', 'mock');
+                                showToast("Режим сканування змінено на Симуляцію", "info");
+                              }}
+                            >
+                              Перемкнути на Симуляцію (Локальна база)
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Product Database Card */}
+            <div className="glass-card database-manager-card" style={{ marginTop: '16px' }}>
+              <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Database size={18} style={{ color: 'var(--color-calories)' }} />
+                База продуктів
+              </h3>
+
+              <div className="database-stat-grid">
+                <div className="database-stat-tile">
+                  <span>Усього</span>
+                  <strong>{databaseStats.total}</strong>
+                </div>
+                <div className="database-stat-tile">
+                  <span>Каталог</span>
+                  <strong>{databaseStats.catalog}</strong>
+                </div>
+                <div className="database-stat-tile">
+                  <span>Моя база</span>
+                  <strong>{databaseStats.custom}</strong>
+                </div>
+                <div className="database-stat-tile">
+                  <span>Штрих-коди</span>
+                  <strong>{databaseStats.customBarcodes}</strong>
+                </div>
+              </div>
+
+              <div className="database-source-list">
+                {databaseStats.topSources.map(([source, count]) => (
+                  <div key={source} className="database-source-row">
+                    <span>{source}</span>
+                    <strong>{count}</strong>
+                  </div>
+                ))}
+              </div>
+
+              <p className="settings-info-text" style={{ marginTop: '12px' }}>
+                Власні продукти і штрих-коди мають пріоритет над зовнішніми підказками. Імпорт CSV/JSON додає продукти у вашу локальну базу на цьому пристрої.
+              </p>
+
+              <div className="database-action-grid">
+                <button
+                  type="button"
+                  className="database-action-btn primary"
+                  onClick={() => {
+                    setCustomFoodName('');
+                    setCustomFoodCalories('');
+                    setCustomFoodProtein('');
+                    setCustomFoodFat('');
+                    setCustomFoodCarbs('');
+                    setCustomFoodWeight('100');
+                    setCustomFoodEditTarget(null);
+                    setIsCustomFoodModalOpen(true);
+                  }}
+                >
+                  <Plus size={16} />
+                  Додати вручну
+                </button>
+
+                <label className="database-action-btn">
+                  <Upload size={16} />
+                  Імпорт CSV/JSON
+                  <input
+                    type="file"
+                    accept=".csv,.json,text/csv,application/json"
+                    onChange={importProductDatabase}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  className="database-action-btn"
+                  onClick={downloadProductImportTemplate}
+                >
+                  <Download size={16} />
+                  Шаблон CSV
+                </button>
+
+                <button
+                  type="button"
+                  className="database-action-btn"
+                  onClick={() => {
+                    setScannerMode('search');
+                    setActiveTab('scanner');
+                  }}
+                >
+                  <Search size={16} />
+                  Пошук у базі
+                </button>
               </div>
             </div>
 
@@ -4292,7 +5547,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.2.0 (Smart AI Search + Varieties)</p>
+              <p>NutriSnap v1.5.6 (Typography Polish)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
@@ -4331,124 +5586,6 @@ export default function App() {
               >
                 Очистити кеш та оновити додаток
               </button>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* 6. ANALYTICS TAB */}
-        {/* ========================================================================= */}
-        {activeTab === 'analytics' && (
-          <div>
-            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <BarChart2 size={20} style={{ color: 'var(--color-accent)' }} />
-              Аналітика за 7 днів
-            </h2>
-
-            {/* Weekly calories bar chart */}
-            <div className="glass-card analytics-chart-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <h3 style={{ fontSize: '14px', fontWeight: 600 }}>Калорії по днях</h3>
-                <span style={{ fontSize: '11px', color: 'var(--text-dark-muted)' }}>Ціль: {profile.targetCalories} ккал</span>
-              </div>
-              <div className="analytics-bars-container">
-                {weeklyAnalytics.map((day, i) => {
-                  const barHeight = day.calories > 0 ? Math.max((day.calories / Math.max(...weeklyAnalytics.map(d => Math.max(d.calories, profile.targetCalories)))) * 100, 4) : 0;
-                  const isOver = day.calories > profile.targetCalories;
-                  return (
-                    <div key={i} className={`analytics-bar-col ${day.isToday ? 'today' : ''}`}>
-                      <div className="analytics-bar-val">
-                        {day.calories > 0 ? day.calories : ''}
-                      </div>
-                      <div className="analytics-bar-track">
-                        {/* Goal line */}
-                        <div className="analytics-goal-line" style={{ bottom: `${Math.min((profile.targetCalories / Math.max(...weeklyAnalytics.map(d => Math.max(d.calories, profile.targetCalories)))) * 100, 100)}%` }} />
-                        <div
-                          className={`analytics-bar-fill ${isOver ? 'over-goal' : ''}`}
-                          style={{ height: `${barHeight}%` }}
-                        />
-                      </div>
-                      <div className="analytics-bar-label">{day.label}</div>
-                      <div className="analytics-bar-day">{day.dayNum}</div>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="analytics-legend">
-                <span className="legend-item"><span className="legend-dot" style={{ background: 'var(--color-accent)' }}></span>Калорії</span>
-                <span className="legend-item"><span className="legend-line"></span>Ціль</span>
-                <span className="legend-item"><span className="legend-dot" style={{ background: '#f87171' }}></span>Перевищення</span>
-              </div>
-            </div>
-
-            {/* Weekly average stats */}
-            <div className="glass-card" style={{ marginTop: '12px' }}>
-              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '14px' }}>Середні показники за тиждень</h3>
-              {(() => {
-                const activeDays = weeklyAnalytics.filter(d => d.calories > 0);
-                const avgCals = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.calories, 0) / activeDays.length) : 0;
-                const avgProtein = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.protein, 0) / activeDays.length * 10) / 10 : 0;
-                const avgWater = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.water, 0) / activeDays.length) : 0;
-                const loggedDays = activeDays.length;
-                return (
-                  <div className="analytics-stats-grid">
-                    <div className="analytics-stat-card">
-                      <div className="analytics-stat-val" style={{ color: 'var(--color-calories)' }}>{avgCals}</div>
-                      <div className="analytics-stat-label">ккал/день</div>
-                      <div className="analytics-stat-sub">{avgCals > 0 ? `${Math.round((avgCals/profile.targetCalories)*100)}% від цілі` : '–'}</div>
-                    </div>
-                    <div className="analytics-stat-card">
-                      <div className="analytics-stat-val" style={{ color: 'var(--color-protein)' }}>{avgProtein}г</div>
-                      <div className="analytics-stat-label">білки/день</div>
-                      <div className="analytics-stat-sub">{avgProtein > 0 ? `${Math.round((avgProtein/profile.targetProtein)*100)}% від цілі` : '–'}</div>
-                    </div>
-                    <div className="analytics-stat-card">
-                      <div className="analytics-stat-val" style={{ color: '#3b82f6' }}>{avgWater}</div>
-                      <div className="analytics-stat-label">мл води/день</div>
-                      <div className="analytics-stat-sub">{avgWater > 0 ? `${Math.round((avgWater/(profile.targetWater||2000))*100)}% від цілі` : '–'}</div>
-                    </div>
-                    <div className="analytics-stat-card">
-                      <div className="analytics-stat-val" style={{ color: '#f59e0b' }}>{loggedDays}/7</div>
-                      <div className="analytics-stat-label">днів у щоденнику</div>
-                      <div className="analytics-stat-sub">{loggedDays === 7 ? '🔥 Ідеально!' : loggedDays >= 5 ? '👍 Добре!' : 'Продовжуй!'}</div>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Daily goal heatmap */}
-            <div className="glass-card" style={{ marginTop: '12px' }}>
-              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '14px' }}>Виконання цілі по днях</h3>
-              <div className="heatmap-container">
-                {weeklyAnalytics.map((day, i) => (
-                  <div key={i} className="heatmap-day" onClick={() => { setSelectedDate(day.dateStr); setActiveTab('dashboard'); }}>
-                    <div
-                      className="heatmap-cell"
-                      style={{
-                        background: day.calories === 0
-                          ? 'rgba(255,255,255,0.04)'
-                          : day.goalPercent >= 90 && day.goalPercent <= 110
-                          ? 'rgba(16,185,129,0.7)'
-                          : day.goalPercent > 110
-                          ? 'rgba(239,68,68,0.6)'
-                          : `rgba(16,185,129,${day.goalPercent / 100 * 0.6 + 0.1})`,
-                        border: day.isToday ? '2px solid var(--color-accent)' : '2px solid transparent'
-                      }}
-                      title={`${day.goalPercent}% від цілі (${day.calories} ккал)`}
-                    >
-                      {day.goalPercent > 0 && <span style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>{day.goalPercent}%</span>}
-                    </div>
-                    <div className="heatmap-label">{day.label}</div>
-                    <div className="heatmap-day-num">{day.dayNum}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="heatmap-legend" style={{ marginTop: '10px', display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-dark-muted)' }}>
-                <span>🟩 90–110% = В нормі</span>
-                <span>🟥 &gt;110% = Перевищення</span>
-                <span>🟦 &lt;90% = Недобір</span>
-              </div>
             </div>
           </div>
         )}
@@ -4504,15 +5641,24 @@ export default function App() {
             <User size={22} />
             <span>Профіль</span>
           </button>
+          <button 
+            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+            onClick={() => setActiveTab('settings')}
+            aria-label="Налаштування"
+            title="Налаштування"
+          >
+            <Settings size={22} />
+            <span>Налашт.</span>
+          </button>
         </nav>
       )}
       {/* Модальне вікно для створення продукту вручну */}
       {isCustomFoodModalOpen && (
-        <div className="modal-backdrop" onClick={() => setIsCustomFoodModalOpen(false)}>
+        <div className="modal-backdrop" onClick={closeCustomFoodModal}>
           <div className="modal-content glassmorphic-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>➕ Створення продукту вручну</h3>
-              <button className="modal-close-btn" onClick={() => setIsCustomFoodModalOpen(false)}>
+              <h3>{customFoodEditTarget ? '✏️ Редагувати продукт у моїй базі' : '➕ Додати продукт у мою базу'}</h3>
+              <button className="modal-close-btn" onClick={closeCustomFoodModal}>
                 <X size={16} />
               </button>
             </div>
@@ -4597,14 +5743,14 @@ export default function App() {
               </div>
 
               <div style={{ fontSize: '11px', color: 'var(--text-dark-muted)', background: 'rgba(255, 255, 255, 0.03)', padding: '12px', borderRadius: '12px', marginTop: '4px', textAlign: 'left', lineHeight: '1.4', border: '1px solid rgba(255,255,255,0.03)' }}>
-                💡 <strong>Підказка:</strong> Введіть вагу та КБЖВ для будь-якої порції. Додаток автоматично приведе продукт до 100 г, щоб ви могли пізніше легко додавати будь-яку кількість грам.
+                💡 <strong>Підказка:</strong> Введіть вагу та КБЖВ з етикетки для будь-якої порції. Додаток автоматично приведе продукт до 100 г і збереже його у вашій базі для наступних пошуків.
               </div>
             </div>
 
             <div className="modal-footer" style={{ marginTop: '20px' }}>
               <button 
                 className="btn-secondary" 
-                onClick={() => setIsCustomFoodModalOpen(false)}
+                onClick={closeCustomFoodModal}
                 style={{ padding: '10px 16px' }}
               >
                 Скасувати
@@ -4615,7 +5761,7 @@ export default function App() {
                 style={{ padding: '10px 20px' }}
               >
                 <Check size={18} />
-                Зберегти
+                {customFoodEditTarget ? 'Оновити продукт' : 'Зберегти в базу'}
               </button>
             </div>
           </div>
@@ -4628,7 +5774,7 @@ export default function App() {
           <div className="modal-content glassmorphic-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h3>➕ Новий штрих-код</h3>
+                <h3>➕ Зберегти продукт у базу</h3>
                 <span style={{ fontSize: '11px', opacity: 0.7, color: 'var(--color-water)' }}>Код: {barcodeNotFound}</span>
               </div>
               <button className="modal-close-btn" onClick={() => setIsBarcodeNotFoundModalOpen(false)}>
@@ -4716,7 +5862,7 @@ export default function App() {
               </div>
 
               <div style={{ fontSize: '11px', color: 'var(--text-dark-muted)', background: 'rgba(255, 255, 255, 0.03)', padding: '12px', borderRadius: '12px', marginTop: '4px', textAlign: 'left', lineHeight: '1.4', border: '1px solid rgba(255,255,255,0.03)' }}>
-                💡 <strong>Підказка:</strong> Після збереження цей продукт буде прив'язано до штрих-коду {barcodeNotFound}. При наступному скануванні він визначиться автоматично!
+                💡 <strong>Підказка:</strong> Введіть назву та КБЖВ з етикетки. Після збереження продукт буде у вашій базі та прив'яжеться до штрих-коду {barcodeNotFound}.
               </div>
             </div>
 
@@ -4734,7 +5880,7 @@ export default function App() {
                 style={{ padding: '10px 20px' }}
               >
                 <Check size={18} />
-                Зберегти
+                Зберегти в базу
               </button>
             </div>
           </div>
@@ -4742,6 +5888,19 @@ export default function App() {
       )}
 
       {/* Toast Notification Container */}
+      {updateRegistration && (
+        <div className="app-update-banner">
+          <div>
+            <strong>Доступна нова версія</strong>
+            <span> Оновіть NutriSnap, щоб отримати останні виправлення.</span>
+          </div>
+          <button type="button" onClick={applyAppUpdate}>
+            <RefreshCw size={14} />
+            Оновити
+          </button>
+        </div>
+      )}
+
       {toast && (
         <div className={`toast-notification toast-${toast.type}`}>
           <div className="toast-content">
@@ -4750,16 +5909,18 @@ export default function App() {
               {toast.type === 'error' && <AlertCircle size={16} style={{ color: '#ef4444' }} />}
               {toast.type === 'info' && <AlertCircle size={16} style={{ color: '#3b82f6' }} />}
               {toast.type === 'warning' && <AlertCircle size={16} style={{ color: '#f59e0b' }} />}
-              {toast.type === 'undo' && <Trash2 size={16} style={{ color: '#f87171' }} />}
             </span>
             <span className="toast-message">{toast.message}</span>
-            {toast.type === 'undo' && toast.onUndo && (
+            {toast.actionLabel && (
               <button
-                className="toast-undo-btn"
-                onClick={toast.onUndo}
+                type="button"
+                className="toast-action-btn"
+                onClick={() => {
+                  toast.onAction?.();
+                  setToast(null);
+                }}
               >
-                <RotateCcw size={13} />
-                Скасувати
+                {toast.actionLabel}
               </button>
             )}
           </div>
