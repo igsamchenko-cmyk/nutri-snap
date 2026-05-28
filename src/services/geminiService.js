@@ -5,6 +5,87 @@
 // Допоміжна функція для обробки помилок Gemini API
 export const SERVER_GEMINI_API_KEY = '__nutrisnap_server_gemini_key__';
 
+// JSON-схеми для structured output Gemini (nullable за форматом Gemini/OpenAPI)
+const FOOD_SCAN_SCHEMA = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    calories: { type: 'integer', nullable: true },
+    protein: { type: 'number', nullable: true },
+    fat: { type: 'number', nullable: true },
+    carbs: { type: 'number', nullable: true },
+    weight: { type: 'integer' },
+    confidence: { type: 'integer' },
+    ingredients: { type: 'string' },
+    dataQuality: { type: 'string', enum: ['estimate', 'label_read', 'insufficient'] },
+    needsManualNutrition: { type: 'boolean' },
+    warning: { type: 'string' }
+  },
+  required: ['name', 'calories', 'protein', 'fat', 'carbs', 'weight', 'confidence', 'ingredients', 'dataQuality', 'needsManualNutrition', 'warning']
+};
+
+const PACKAGING_SCHEMA = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    calories: { type: 'integer', nullable: true },
+    protein: { type: 'number', nullable: true },
+    fat: { type: 'number', nullable: true },
+    carbs: { type: 'number', nullable: true },
+    weight: { type: 'integer' },
+    ingredients: { type: 'string', nullable: true },
+    dataQuality: { type: 'string', enum: ['label_read', 'insufficient'] },
+    needsManualNutrition: { type: 'boolean' },
+    warning: { type: 'string' }
+  },
+  required: ['name', 'calories', 'protein', 'fat', 'carbs', 'weight', 'dataQuality', 'needsManualNutrition', 'warning']
+};
+
+const BARCODE_SCHEMA = {
+  type: 'object',
+  properties: {
+    barcode: { type: 'string', nullable: true }
+  },
+  required: ['barcode']
+};
+
+const NAME_ESTIMATE_SCHEMA = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    calories: { type: 'integer' },
+    protein: { type: 'number' },
+    fat: { type: 'number' },
+    carbs: { type: 'number' },
+    weight: { type: 'integer' },
+    ingredients: { type: 'string' },
+    icon: { type: 'string' }
+  },
+  required: ['name', 'calories', 'protein', 'fat', 'carbs', 'weight', 'ingredients', 'icon']
+};
+
+const SMART_SEARCH_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      name: { type: 'string' },
+      supermarket: { type: 'string' },
+      brand: { type: 'string' },
+      calories: { type: 'integer' },
+      protein: { type: 'number' },
+      fat: { type: 'number' },
+      carbs: { type: 'number' },
+      weight: { type: 'integer' },
+      ingredients: { type: 'string' },
+      icon: { type: 'string' }
+    },
+    required: ['id', 'name', 'supermarket', 'brand', 'calories', 'protein', 'fat', 'carbs', 'weight', 'ingredients', 'icon']
+  }
+};
+
+
 async function requestGeminiContent(modelName, payload, apiKey) {
   const useServerKey = apiKey === SERVER_GEMINI_API_KEY;
   const url = useServerKey
@@ -95,6 +176,7 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
     ],
     generationConfig: {
       responseMimeType: "application/json",
+      responseSchema: FOOD_SCAN_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
     }
@@ -162,6 +244,7 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
     ],
     generationConfig: {
       responseMimeType: "application/json",
+      responseSchema: BARCODE_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
     }
@@ -215,6 +298,7 @@ export async function estimateFoodNutritionByName(foodName, apiKey, modelName = 
     ],
     generationConfig: {
       responseMimeType: "application/json",
+      responseSchema: NAME_ESTIMATE_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
     }
@@ -284,6 +368,7 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
     ],
     generationConfig: {
       responseMimeType: "application/json",
+      responseSchema: PACKAGING_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
     }
@@ -361,6 +446,7 @@ export async function searchSmartProducts(query, apiKey, modelName = 'gemini-2.5
     ],
     generationConfig: {
       responseMimeType: "application/json",
+      responseSchema: SMART_SEARCH_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
     }
