@@ -1493,6 +1493,33 @@ body.light-mode .meal-macro-edit-field {
   background: rgba(244, 63, 94, 0.1);
 }
 
+.meal-repeat-btn {
+  background: none;
+  border: none;
+  color: var(--text-dark-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  transition: var(--transition-smooth);
+  margin-left: 8px;
+}
+
+.meal-repeat-btn:hover {
+  color: var(--color-calories);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+body.light-mode .meal-repeat-btn {
+  color: var(--text-light-muted);
+}
+
+body.light-mode .meal-repeat-btn:hover {
+  color: #047857;
+  background: rgba(5, 150, 105, 0.1);
+}
+
 /* Settings fields styles */
 .settings-group {
   display: flex;

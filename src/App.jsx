@@ -2323,6 +2323,19 @@ export default function App() {
     setMeals(prev => prev.filter(m => m.id !== id));
   };
 
+  const repeatMeal = (meal) => {
+    const repeatedMeal = {
+      ...meal,
+      id: createMealId(),
+      date: selectedDate,
+      repeatedFrom: meal.id,
+      repeatedAt: new Date().toISOString()
+    };
+
+    setMeals(prev => [repeatedMeal, ...prev]);
+    showToast(`"${meal.name}" додано ще раз`, "success");
+  };
+
   // Зміна цільових КБЖВ при зміні ваги або цілі
   const handleProfileChange = (key, value) => {
     const updated = { ...profile, [key]: value };
@@ -3031,6 +3044,14 @@ export default function App() {
                                   </label>
                                 </div>
                               </div>
+                              <button
+                                className="meal-repeat-btn"
+                                onClick={() => repeatMeal(meal)}
+                                title="Додати ще раз"
+                                aria-label={`Додати "${meal.name}" ще раз`}
+                              >
+                                <Plus size={16} />
+                              </button>
                               <button 
                                 className={`meal-favorite-btn ${isFavorite(meal.name) ? 'active' : ''}`} 
                                 onClick={() => toggleFavoriteMeal(meal)} 
@@ -4717,6 +4738,14 @@ export default function App() {
                                   </label>
                                 </div>
                               </div>
+                              <button
+                                className="meal-repeat-btn"
+                                onClick={() => repeatMeal(meal)}
+                                title="Додати ще раз"
+                                aria-label={`Додати "${meal.name}" ще раз`}
+                              >
+                                <Plus size={16} />
+                              </button>
                               <button 
                                 className={`meal-favorite-btn ${isFavorite(meal.name) ? 'active' : ''}`} 
                                 onClick={() => toggleFavoriteMeal(meal)} 
@@ -5259,7 +5288,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.5.3 (Smart Portions)</p>
+              <p>NutriSnap v1.5.4 (Repeat Meals)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={() => {
