@@ -31,7 +31,8 @@ import {
   BarChart2,
   TrendingUp,
   Zap,
-  CalendarDays
+  CalendarDays,
+  Copy
 } from 'lucide-react';
 import {
   SERVER_GEMINI_API_KEY,
@@ -874,6 +875,16 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('nutrisnap_food_portions', JSON.stringify(rememberedFoodPortions));
   }, [rememberedFoodPortions]);
+
+  useEffect(() => {
+    const handleDocumentClick = () => {
+      setActiveCopyMenu(null);
+    };
+    document.addEventListener('click', handleDocumentClick);
+    return () => {
+      document.removeEventListener('click', handleDocumentClick);
+    };
+  }, []);
 
   const getRememberedFoodPortion = (food) => {
     const key = getFoodPortionKey(food);
@@ -2382,6 +2393,46 @@ export default function App() {
     showToast(`"${meal.name}" додано ще раз`, "success");
   };
 
+  const [activeCopyMenu, setActiveCopyMenu] = useState(null);
+
+  const getRecentDatesForCategory = (categoryName) => {
+    const dates = [];
+    const sortedMeals = [...meals].sort((a, b) => b.date.localeCompare(a.date));
+    
+    for (const m of sortedMeals) {
+      const mCat = m.category === 'Перекус' ? 'Перший перекус' : m.category;
+      if (mCat === categoryName && m.date !== selectedDate && !dates.includes(m.date)) {
+        dates.push(m.date);
+        if (dates.length >= 3) break;
+      }
+    }
+    return dates;
+  };
+
+  const copyCategoryMeals = (categoryName, sourceDate) => {
+    const sourceMeals = meals.filter(m => {
+      const mCat = m.category === 'Перекус' ? 'Перший перекус' : m.category;
+      return mCat === categoryName && m.date === sourceDate;
+    });
+    
+    if (sourceMeals.length === 0) {
+      showToast("Немає страв для копіювання з цієї дати", "warning");
+      return;
+    }
+    
+    const newMeals = sourceMeals.map(m => ({
+      ...m,
+      id: createMealId(),
+      date: selectedDate,
+      time: new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }),
+      copiedFrom: m.id,
+      copiedAt: new Date().toISOString()
+    }));
+    
+    setMeals(prev => [...newMeals, ...prev]);
+    showToast(`Скопійовано ${categoryName} (${newMeals.length} шт.)`, "success");
+  };
+
   // Зміна цільових КБЖВ при зміні ваги або цілі
   // Розрахунок BMR за формулою Харріса-Бенедикта та TDEE
   const calculateBMR = useCallback((w, h, a, g) => {
@@ -2644,20 +2695,7 @@ export default function App() {
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (calPercent / 100) * circumference;
 
-  // ТОП-5 найчастіших страв для швидкого додавання
-  const topMeals = useMemo(() => {
-    const counts = {};
-    meals.forEach(m => {
-      if (!m.name) return;
-      if (!counts[m.name]) counts[m.name] = { count: 0, meal: m };
-      counts[m.name].count++;
-      counts[m.name].meal = m;
-    });
-    return Object.values(counts)
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5)
-      .map(item => item.meal);
-  }, [meals]);
+
 
   // Дані аналітики за 7 днів
   const weeklyAnalytics = useMemo(() => {
@@ -3048,51 +3086,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Quick Add — ТОП-5 страв */}
-            {topMeals.length > 0 && (
-              <div className="quick-add-section" style={{ marginTop: '20px' }}>
-                <h3 className="section-title" style={{ marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Zap size={16} style={{ color: '#f59e0b' }} />
-                  Швидке додавання
-                </h3>
-                <div className="quick-add-tray">
-                  {topMeals.map((meal, idx) => (
-                    <button
-                      key={idx}
-                      className="quick-add-chip"
-                      onClick={() => {
-                        const category = getDefaultCategory();
-                        const mealTimeStr = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
-                        const newMeal = {
-                          id: Math.random().toString(36).substring(2, 9) + '-' + Date.now(),
-                          name: meal.name,
-                          calories: Number(meal.calories) || 0,
-                          protein: Number(meal.protein) || 0,
-                          fat: Number(meal.fat) || 0,
-                          carbs: Number(meal.carbs) || 0,
-                          weight: Number(meal.weight) || 100,
-                          originalCalories: Number(meal.originalCalories || meal.calories) || 0,
-                          originalProtein: Number(meal.originalProtein || meal.protein) || 0,
-                          originalFat: Number(meal.originalFat || meal.fat) || 0,
-                          originalCarbs: Number(meal.originalCarbs || meal.carbs) || 0,
-                          originalWeight: Number(meal.originalWeight || meal.weight) || 100,
-                          category,
-                          time: mealTimeStr,
-                          date: selectedDate,
-                          icon: getEmojiForCategory(category)
-                        };
-                        setMeals(prev => [newMeal, ...prev]);
-                        showToast(`"${meal.name}" додано!`, 'success');
-                      }}
-                      title={`${meal.calories} ккал · ${meal.weight}г`}
-                    >
-                      <span className="quick-add-chip-name">{meal.name}</span>
-                      <span className="quick-add-chip-cals">{meal.calories} ккал</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+
 
             {/* Meals Timeline */}
             <div style={{ marginTop: '24px' }}>
@@ -3122,8 +3116,32 @@ export default function App() {
                           <span>{cat.icon}</span>
                           <span>{cat.name}</span>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
                           {catCals > 0 && <span className="category-total-cals">{catCals} ккал</span>}
+                          
+                          <button 
+                            className="category-copy-btn" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveCopyMenu(activeCopyMenu?.category === cat.name && activeCopyMenu?.tab === 'dashboard' ? null : { category: cat.name, tab: 'dashboard' });
+                            }}
+                            title={`Копіювати ${cat.name} з іншого дня`}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'rgba(255, 255, 255, 0.4)',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              borderRadius: '4px',
+                              transition: 'all 0.2s'
+                            }}
+                          >
+                            <Copy size={14} />
+                          </button>
+
                           <button 
                             className="category-add-btn" 
                             onClick={() => {
@@ -3135,6 +3153,80 @@ export default function App() {
                           >
                             <Plus size={16} />
                           </button>
+
+                          {activeCopyMenu?.category === cat.name && activeCopyMenu?.tab === 'dashboard' && (
+                            <div className="copy-dropdown-menu" style={{
+                              position: 'absolute',
+                              top: '100%',
+                              right: 0,
+                              zIndex: 100,
+                              background: '#1f1f24',
+                              border: '1px solid rgba(255, 255, 255, 0.1)',
+                              borderRadius: '8px',
+                              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                              padding: '6px',
+                              minWidth: '160px',
+                              marginTop: '4px'
+                            }}>
+                              <div style={{ padding: '4px 8px', fontSize: '10px', color: 'var(--text-dark-muted)', fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '4px' }}>
+                                КОПІЮВАТИ З:
+                              </div>
+                              {(() => {
+                                const recentDates = getRecentDatesForCategory(cat.name);
+                                if (recentDates.length === 0) {
+                                  return <div style={{ padding: '6px 8px', fontSize: '11px', color: 'var(--text-dark-muted)' }}>Немає історії страв</div>;
+                                }
+                                return recentDates.map(dString => {
+                                  const dateObj = new Date(dString);
+                                  const formattedDate = dateObj.toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' });
+                                  
+                                  const today = new Date();
+                                  const yesterday = new Date(today);
+                                  yesterday.setDate(yesterday.getDate() - 1);
+                                  const yesterdayStr = yesterday.toISOString().split('T')[0];
+                                  
+                                  let label = formattedDate;
+                                  if (dString === yesterdayStr) {
+                                    label = `Вчора (${formattedDate})`;
+                                  } else {
+                                    const twoDaysAgo = new Date(today);
+                                    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+                                    const twoDaysAgoStr = twoDaysAgo.toISOString().split('T')[0];
+                                    if (dString === twoDaysAgoStr) {
+                                      label = `Позавчора (${formattedDate})`;
+                                    }
+                                  }
+
+                                  return (
+                                    <button
+                                      key={dString}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        copyCategoryMeals(cat.name, dString);
+                                        setActiveCopyMenu(null);
+                                      }}
+                                      style={{
+                                        width: '100%',
+                                        textAlign: 'left',
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: '#fff',
+                                        padding: '6px 8px',
+                                        borderRadius: '4px',
+                                        fontSize: '11px',
+                                        cursor: 'pointer',
+                                        display: 'block',
+                                        transition: 'background 0.2s'
+                                      }}
+                                      className="copy-dropdown-item"
+                                    >
+                                      {label}
+                                    </button>
+                                  );
+                                });
+                              })()}
+                            </div>
+                          )}
                         </div>
                       </div>
                       
@@ -4841,8 +4933,32 @@ export default function App() {
                           <span>{cat.icon}</span>
                           <span>{cat.name}</span>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
                           {catCals > 0 && <span className="category-total-cals">{catCals} ккал</span>}
+                          
+                          <button 
+                            className="category-copy-btn" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveCopyMenu(activeCopyMenu?.category === cat.name && activeCopyMenu?.tab === 'diary' ? null : { category: cat.name, tab: 'diary' });
+                            }}
+                            title={`Копіювати ${cat.name} з іншого дня`}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'rgba(255, 255, 255, 0.4)',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              borderRadius: '4px',
+                              transition: 'all 0.2s'
+                            }}
+                          >
+                            <Copy size={14} />
+                          </button>
+
                           <button 
                             className="category-add-btn" 
                             onClick={() => {
@@ -4854,6 +4970,80 @@ export default function App() {
                           >
                             <Plus size={16} />
                           </button>
+
+                          {activeCopyMenu?.category === cat.name && activeCopyMenu?.tab === 'diary' && (
+                            <div className="copy-dropdown-menu" style={{
+                              position: 'absolute',
+                              top: '100%',
+                              right: 0,
+                              zIndex: 100,
+                              background: '#1f1f24',
+                              border: '1px solid rgba(255, 255, 255, 0.1)',
+                              borderRadius: '8px',
+                              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                              padding: '6px',
+                              minWidth: '160px',
+                              marginTop: '4px'
+                            }}>
+                              <div style={{ padding: '4px 8px', fontSize: '10px', color: 'var(--text-dark-muted)', fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '4px' }}>
+                                КОПІЮВАТИ З:
+                              </div>
+                              {(() => {
+                                const recentDates = getRecentDatesForCategory(cat.name);
+                                if (recentDates.length === 0) {
+                                  return <div style={{ padding: '6px 8px', fontSize: '11px', color: 'var(--text-dark-muted)' }}>Немає історії страв</div>;
+                                }
+                                return recentDates.map(dString => {
+                                  const dateObj = new Date(dString);
+                                  const formattedDate = dateObj.toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' });
+                                  
+                                  const today = new Date();
+                                  const yesterday = new Date(today);
+                                  yesterday.setDate(yesterday.getDate() - 1);
+                                  const yesterdayStr = yesterday.toISOString().split('T')[0];
+                                  
+                                  let label = formattedDate;
+                                  if (dString === yesterdayStr) {
+                                    label = `Вчора (${formattedDate})`;
+                                  } else {
+                                    const twoDaysAgo = new Date(today);
+                                    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+                                    const twoDaysAgoStr = twoDaysAgo.toISOString().split('T')[0];
+                                    if (dString === twoDaysAgoStr) {
+                                      label = `Позавчора (${formattedDate})`;
+                                    }
+                                  }
+
+                                  return (
+                                    <button
+                                      key={dString}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        copyCategoryMeals(cat.name, dString);
+                                        setActiveCopyMenu(null);
+                                      }}
+                                      style={{
+                                        width: '100%',
+                                        textAlign: 'left',
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: '#fff',
+                                        padding: '6px 8px',
+                                        borderRadius: '4px',
+                                        fontSize: '11px',
+                                        cursor: 'pointer',
+                                        display: 'block',
+                                        transition: 'background 0.2s'
+                                      }}
+                                      className="copy-dropdown-item"
+                                    >
+                                      {label}
+                                    </button>
+                                  );
+                                });
+                              })()}
+                            </div>
+                          )}
                         </div>
                       </div>
                       

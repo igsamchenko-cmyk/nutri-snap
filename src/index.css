@@ -1464,6 +1464,8 @@ body.light-mode .timeline-item {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  flex: 1;
 }
 
 .meal-emoji {
@@ -1484,6 +1486,8 @@ body.light-mode .meal-emoji {
 .meal-text {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  flex: 1;
 }
 
 .meal-name {
@@ -1513,6 +1517,7 @@ body.light-mode .meal-meta {
   align-items: flex-end;
   gap: 5px;
   min-width: 0;
+  flex-shrink: 0;
 }
 
 .meal-kcal {
