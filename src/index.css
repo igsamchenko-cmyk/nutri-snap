@@ -1464,8 +1464,6 @@ body.light-mode .timeline-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 0;
-  flex: 1;
 }
 
 .meal-emoji {
@@ -1486,8 +1484,6 @@ body.light-mode .meal-emoji {
 .meal-text {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  flex: 1;
 }
 
 .meal-name {
@@ -1495,11 +1491,10 @@ body.light-mode .meal-emoji {
   font-weight: 750;
   line-height: 1.25;
   color: var(--text-dark-primary);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: min(320px, 42vw);
 }
 
 body.light-mode .meal-name {
