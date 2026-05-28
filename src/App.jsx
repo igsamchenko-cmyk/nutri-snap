@@ -56,6 +56,30 @@ const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' :
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+
+// Безпечний запис у localStorage: не валить рендер при переповненні квоти,
+// а сигналізує застосунку, щоб показати попередження користувачу.
+function safeSetItem(key, value) {
+  try {
+    safeSetItem(key, value);
+    return true;
+  } catch (e) {
+    console.error(`localStorage setItem failed for "${key}":`, e);
+    const isQuota = e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014);
+    if (isQuota && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('nutrisnap-storage-full', { detail: { key } }));
+    }
+    return false;
+  }
+}
+
+function safeRemoveItem(key) {
+  try {
+    safeRemoveItem(key);
+  } catch (e) {
+    console.error(`localStorage removeItem failed for "${key}":`, e);
+  }
+}
 const PRODUCT_IMPORT_FIELDS = {
   name: ["name", "назва", "продукт", "title"],
   brand: ["brand", "бренд", "виробник"],
@@ -502,7 +526,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_favorites', JSON.stringify(favorites));
+    safeSetItem('nutrisnap_favorites', JSON.stringify(favorites));
   }, [favorites]);
 
   useEffect(() => {
@@ -797,47 +821,47 @@ export default function App() {
 
   // --- Sync to LocalStorage ---
   useEffect(() => {
-    localStorage.setItem('nutrisnap_meals', JSON.stringify(meals));
+    safeSetItem('nutrisnap_meals', JSON.stringify(meals));
   }, [meals]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_water', JSON.stringify(waterIntake));
+    safeSetItem('nutrisnap_water', JSON.stringify(waterIntake));
   }, [waterIntake]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_profile', JSON.stringify(profile));
+    safeSetItem('nutrisnap_profile', JSON.stringify(profile));
   }, [profile]);
 
   useEffect(() => {
     if (apiKey === SERVER_GEMINI_API_KEY) {
-      localStorage.removeItem('nutrisnap_apikey');
+      safeRemoveItem('nutrisnap_apikey');
     } else {
-      localStorage.setItem('nutrisnap_apikey', apiKey.trim());
+      safeSetItem('nutrisnap_apikey', apiKey.trim());
     }
   }, [apiKey]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_openai_apikey', openAiApiKey.trim());
+    safeSetItem('nutrisnap_openai_apikey', openAiApiKey.trim());
   }, [openAiApiKey]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_openai_proxy_url', openAiProxyUrl.trim());
+    safeSetItem('nutrisnap_openai_proxy_url', openAiProxyUrl.trim());
   }, [openAiProxyUrl]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_scanmode', scanMode);
+    safeSetItem('nutrisnap_scanmode', scanMode);
   }, [scanMode]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_geminimodel', geminiModel);
+    safeSetItem('nutrisnap_geminimodel', geminiModel);
   }, [geminiModel]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_openai_model', openAiModel);
+    safeSetItem('nutrisnap_openai_model', openAiModel);
   }, [openAiModel]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_theme', theme);
+    safeSetItem('nutrisnap_theme', theme);
     const bodyClass = document.body.classList;
     if (theme === 'light') {
       bodyClass.add('light-mode');
@@ -855,6 +879,18 @@ export default function App() {
     return () => window.removeEventListener('nutrisnap-update-available', handleUpdateAvailable);
   }, []);
 
+  useEffect(() => {
+    const handleStorageFull = () => {
+      showToast(
+        'Сховище пристрою переповнене. Старі записи можуть не зберігатися — експортуйте резервну копію та видаліть давню історію.',
+        'error',
+        { duration: 7000 }
+      );
+    };
+    window.addEventListener('nutrisnap-storage-full', handleStorageFull);
+    return () => window.removeEventListener('nutrisnap-storage-full', handleStorageFull);
+  }, []);
+
   const applyAppUpdate = () => {
     const waitingWorker = updateRegistration?.waiting;
     if (waitingWorker) {
@@ -865,15 +901,15 @@ export default function App() {
   };
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_custom_barcodes', JSON.stringify(customBarcodes));
+    safeSetItem('nutrisnap_custom_barcodes', JSON.stringify(customBarcodes));
   }, [customBarcodes]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_custom_foods', JSON.stringify(customFoods));
+    safeSetItem('nutrisnap_custom_foods', JSON.stringify(customFoods));
   }, [customFoods]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_food_portions', JSON.stringify(rememberedFoodPortions));
+    safeSetItem('nutrisnap_food_portions', JSON.stringify(rememberedFoodPortions));
   }, [rememberedFoodPortions]);
 
   useEffect(() => {
@@ -5533,7 +5569,7 @@ export default function App() {
                               }}
                               onClick={() => {
                                 setScanMode('mock');
-                                localStorage.setItem('nutrisnap_scanmode', 'mock');
+                                safeSetItem('nutrisnap_scanmode', 'mock');
                                 showToast("Режим сканування змінено на Симуляцію", "info");
                               }}
                               onMouseOver={(e) => {
@@ -5629,7 +5665,7 @@ export default function App() {
                               }}
                               onClick={() => {
                                 setScanMode('mock');
-                                localStorage.setItem('nutrisnap_scanmode', 'mock');
+                                safeSetItem('nutrisnap_scanmode', 'mock');
                                 showToast("Режим сканування змінено на Симуляцію", "info");
                               }}
                             >
