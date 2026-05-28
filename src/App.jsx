@@ -371,6 +371,7 @@ export default function App() {
   // --- States for Database Search ---
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('Усі');
+  const [foodSortOption, setFoodSortOption] = useState('rank');
   const [selectedSearchFood, setSelectedSearchFood] = useState(null);
   const [searchFoodWeight, setSearchFoodWeight] = useState(100);
   const [searchMealCategory, setSearchMealCategory] = useState('Сніданок');
@@ -2172,10 +2173,22 @@ export default function App() {
     }
     return true;
   }).sort((a, b) => {
+    if (foodSortOption === 'caloriesAsc') {
+      return (a.calories || 0) - (b.calories || 0);
+    }
+    if (foodSortOption === 'caloriesDesc') {
+      return (b.calories || 0) - (a.calories || 0);
+    }
+    if (foodSortOption === 'protein') {
+      return (b.protein || 0) - (a.protein || 0);
+    }
+    if (foodSortOption === 'name') {
+      return a.name.localeCompare(b.name, 'uk');
+    }
     const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
     if (rankDiff !== 0) return rankDiff;
     return a.catalogOrder - b.catalogOrder;
-  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, favoriteNameSet, mealUsageStats, normalizedSearchQuery]);
+  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, favoriteNameSet, mealUsageStats, normalizedSearchQuery, foodSortOption]);
 
   const filteredExternalSearchFoods = useMemo(() => externalSearchFoods.filter(food => {
     if (selectedCategoryFilter === 'Усі') return true;
@@ -4149,6 +4162,31 @@ export default function App() {
                       {filter}
                     </button>
                   ))}
+                </div>
+
+                {/* Сортування */}
+                <div className="search-sort-container" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px', marginBottom: '12px', fontSize: '12px', color: 'var(--text-dark-muted)' }}>
+                  <span>Сортувати за:</span>
+                  <select 
+                    value={foodSortOption} 
+                    onChange={(e) => setFoodSortOption(e.target.value)}
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      borderRadius: '6px',
+                      color: 'var(--text-dark)',
+                      padding: '4px 8px',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                  >
+                    <option value="rank" style={{ background: '#1e1e24', color: '#fff' }}>Релевантністю</option>
+                    <option value="caloriesAsc" style={{ background: '#1e1e24', color: '#fff' }}>Калоріями (зростання)</option>
+                    <option value="caloriesDesc" style={{ background: '#1e1e24', color: '#fff' }}>Калоріями (спадання)</option>
+                    <option value="protein" style={{ background: '#1e1e24', color: '#fff' }}>Білками</option>
+                    <option value="name" style={{ background: '#1e1e24', color: '#fff' }}>Назвою (А-Я)</option>
+                  </select>
                 </div>
 
                 {/* Results List */}
