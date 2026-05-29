@@ -1052,17 +1052,21 @@ export default function App() {
     }
 
     const constraints1 = {
-      video: { 
+      video: {
         facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        focusMode: { ideal: 'continuous' },
+        advanced: [{ focusMode: 'continuous' }]
       },
       audio: false
     };
 
     const constraints2 = {
-      video: { 
-        facingMode: 'environment'
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       },
       audio: false
     };
@@ -1097,6 +1101,22 @@ export default function App() {
     try {
       setCameraStream(stream);
       setCameraActive(true);
+
+      // Спроба ввімкнути неперервний автофокус на Android (best-effort)
+      try {
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        const advanced = [];
+        if (caps.focusMode && caps.focusMode.includes('continuous')) {
+          advanced.push({ focusMode: 'continuous' });
+        }
+        if (advanced.length) {
+          await track.applyConstraints({ advanced });
+        }
+      } catch (focusErr) {
+        console.warn('Autofocus constraint not supported:', focusErr);
+      }
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         try {
@@ -1308,7 +1328,7 @@ export default function App() {
     const video = videoRef.current;
     const sourceWidth = video.videoWidth || 640;
     const sourceHeight = video.videoHeight || 480;
-    const maxSide = 960;
+    const maxSide = 1280;
     const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(sourceWidth * scale);
@@ -1317,7 +1337,7 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const base64Data = canvas.toDataURL('image/jpeg', 0.62);
+    const base64Data = canvas.toDataURL('image/jpeg', 0.82);
     triggerScan(base64Data);
   };
 
@@ -1332,8 +1352,8 @@ export default function App() {
           let width = img.width;
           let height = img.height;
           
-          // Обмежуємо максимальний розмір до 800px
-          const max_size = 800;
+          // Обмежуємо максимальний розмір до 1280px (баланс деталь/розмір)
+          const max_size = 1280;
           if (width > height) {
             if (width > max_size) {
               height *= max_size / width;
@@ -1351,8 +1371,8 @@ export default function App() {
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
           
-          // Стискаємо до якості 70% для швидкого завантаження
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          // Якість 82% — достатньо чітко для читання етикеток
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
           resolve(dataUrl);
         };
         img.onerror = (err) => reject(err);
