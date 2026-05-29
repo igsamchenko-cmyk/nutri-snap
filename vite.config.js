@@ -114,6 +114,30 @@ export default defineConfig(({ mode }) => {
     server: {
       host: true,
       port: 5180
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            // React + ReactDOM → vendor chunk (кешується назавжди)
+            if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
+              return 'vendor-react';
+            }
+            // Lucide icons → окремий chunk
+            if (id.includes('node_modules/lucide-react')) {
+              return 'vendor-icons';
+            }
+            // База продуктів → окремий chunk (108KB, рідко змінюється)
+            if (id.includes('/src/data/products') || id.includes('/src/data/ukrainianProductSeeds')) {
+              return 'data-products';
+            }
+            // AI-сервіси → окремий chunk
+            if (id.includes('/src/services/')) {
+              return 'services';
+            }
+          }
+        }
+      }
     }
   }
 })
