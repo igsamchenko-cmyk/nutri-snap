@@ -433,6 +433,15 @@ export default function App() {
     }
   });
 
+  // Показувати трекер води (вимкнено за замовчуванням)
+  const [showWaterTracker, setShowWaterTracker] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_show_water') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   // Профіль користувача та цілі КБЖВ
   const [profile, setProfile] = useState(() => {
     try {
@@ -827,6 +836,10 @@ export default function App() {
   useEffect(() => {
     safeSetItem('nutrisnap_water', JSON.stringify(waterIntake));
   }, [waterIntake]);
+
+  useEffect(() => {
+    safeSetItem('nutrisnap_show_water', String(showWaterTracker));
+  }, [showWaterTracker]);
 
   useEffect(() => {
     safeSetItem('nutrisnap_profile', JSON.stringify(profile));
@@ -2970,6 +2983,7 @@ export default function App() {
             </div>
 
             {/* Water Tracker */}
+            {showWaterTracker && (
             <div className="glass-card water-tracker-card">
               <div className="water-left">
                 <div className="water-icon-box" style={{ overflow: 'visible', position: 'relative' }}>
@@ -3064,6 +3078,7 @@ export default function App() {
                 </button>
               </div>
             </div>
+            )}
 
             {/* Favorites Scroll Tray */}
             {favorites.length > 0 && (
@@ -5500,7 +5515,25 @@ export default function App() {
         {activeTab === 'settings' && (
           <div>
             <h2 className="section-title">Налаштування додатку</h2>
-            
+
+            {/* Interface Settings Card */}
+            <div className="glass-card">
+              <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                Інтерфейс
+              </h3>
+              <div className="settings-group">
+                <label className="settings-row" style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="settings-label" style={{ marginBottom: 0 }}>Показувати трекер води</span>
+                  <input
+                    type="checkbox"
+                    checked={showWaterTracker}
+                    onChange={(e) => setShowWaterTracker(e.target.checked)}
+                    style={{ width: '20px', height: '20px', accentColor: 'var(--color-accent)', cursor: 'pointer' }}
+                  />
+                </label>
+              </div>
+            </div>
+
             {/* AI Scanner Configuration Card */}
             <div className="glass-card">
               <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
