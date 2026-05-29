@@ -3682,3 +3682,247 @@ body.light-mode .modal-input:focus {
   }
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Analytics Tab — Bar chart, stats grid, heatmap
+   (classes were referenced in JSX but had no CSS definitions)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Bar chart container */
+.analytics-bars-container {
+  display: flex;
+  gap: 5px;
+  height: 130px;
+  align-items: flex-end;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.analytics-bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  gap: 2px;
+  min-width: 0;
+}
+
+.analytics-bar-col.today .analytics-bar-label,
+.analytics-bar-col.today .analytics-bar-day {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.analytics-bar-val {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+  min-height: 12px;
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-bar-track {
+  flex: 1;
+  width: 100%;
+  position: relative;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  overflow: visible;
+}
+
+.analytics-goal-line {
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.25);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.analytics-bar-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #10b981;
+  border-radius: 3px 3px 0 0;
+  transition: height 0.5s ease;
+}
+
+.analytics-bar-fill.over-goal {
+  background: #f87171;
+}
+
+.analytics-bar-label {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.analytics-bar-day {
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.3);
+  text-align: center;
+}
+
+/* Legend */
+.analytics-legend {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-line {
+  width: 14px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+
+/* Stats grid — 2×2 */
+.analytics-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.analytics-stat-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.analytics-stat-val {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.analytics-stat-label {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.3;
+}
+
+.analytics-stat-sub {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.3);
+  margin-top: 1px;
+}
+
+/* Heatmap — 7 cells in a row */
+.heatmap-container {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 5px;
+}
+
+.heatmap-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.heatmap-day:active { opacity: 0.7; }
+
+.heatmap-cell {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s;
+  box-sizing: border-box;
+}
+
+.heatmap-day:active .heatmap-cell { transform: scale(0.92); }
+
+.heatmap-label {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.heatmap-day-num {
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.3);
+  text-align: center;
+}
+
+/* Light mode overrides */
+body.light-mode .analytics-stat-card {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.07);
+}
+body.light-mode .analytics-bar-track { background: rgba(0, 0, 0, 0.05); }
+body.light-mode .analytics-bar-val,
+body.light-mode .analytics-bar-label,
+body.light-mode .analytics-bar-day,
+body.light-mode .analytics-stat-label,
+body.light-mode .analytics-stat-sub,
+body.light-mode .legend-item,
+body.light-mode .heatmap-label,
+body.light-mode .heatmap-day-num { color: rgba(0, 0, 0, 0.45); }
+body.light-mode .analytics-goal-line,
+body.light-mode .legend-line { background: rgba(0, 0, 0, 0.2); }
+body.light-mode .analytics-bar-col.today .analytics-bar-label,
+body.light-mode .analytics-bar-col.today .analytics-bar-day { color: #059669; }
+
+/* ── Z Fold 6 cover screen (≤380px) — extra compact nav ────────────────────── */
+@media (max-width: 380px) {
+  .bottom-nav {
+    left: 6px;
+    width: calc(100% - 12px);
+    height: 58px;
+    padding: 0 2px;
+  }
+
+  .nav-item { padding: 4px 1px; gap: 1px; }
+  .nav-item svg { width: 18px; height: 18px; }
+  .nav-item.active span { font-size: 9px; }
+
+  .nav-item-spacer { width: 50px; }
+
+  .scan-fab {
+    width: 50px;
+    height: 50px;
+  }
+
+  .analytics-stat-val { font-size: 17px; }
+  .analytics-bar-val  { font-size: 8px; }
+}
