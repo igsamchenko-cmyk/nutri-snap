@@ -51,7 +51,7 @@ import { productCatalog } from './data/products';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
-const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
+const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' : '';
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
@@ -5599,8 +5599,8 @@ export default function App() {
                         value={openAiModel}
                         onChange={(e) => setOpenAiModel(e.target.value)}
                       >
-                        <option value="gpt-5.5">GPT-5.5 (Точніше)</option>
-                        <option value="gpt-4.1-mini">GPT-4.1 Mini (Швидше)</option>
+                        <option value="gpt-4o">GPT-4o (Точніше)</option>
+                        <option value="gpt-4o-mini">GPT-4o Mini (Швидше)</option>
                       </select>
                     </div>
 
