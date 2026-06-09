@@ -219,7 +219,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
   }
 }
 
-export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-5.5', proxyUrl = '') {
+export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-4o', proxyUrl = '') {
   const promptText = `
     Проаналізуй фото їжі українською мовою.
 
@@ -252,7 +252,7 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
   return normalizeFoodResult(result);
 }
 
-export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-5.5', proxyUrl = '') {
+export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-4o', proxyUrl = '') {
   const promptText = `
     Знайди на фото штрих-код продукту (EAN-13, EAN-8, UPC-A або UPC-E).
     Поверни тільки цифри штрих-коду. Якщо штрих-код не видно або він нечіткий, поверни null.
@@ -279,7 +279,7 @@ export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, model
   return result.barcode;
 }
 
-export async function searchSmartProductsWithOpenAI(query, apiKey, modelName = 'gpt-5.5', proxyUrl = '') {
+export async function searchSmartProductsWithOpenAI(query, apiKey, modelName = 'gpt-4o', proxyUrl = '') {
   if (!query || !query.trim()) {
     return [];
   }

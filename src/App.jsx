@@ -51,11 +51,35 @@ import { productCatalog } from './data/products';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
-const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
+const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' : '';
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+
+// Безпечний запис у localStorage: не валить рендер при переповненні квоти,
+// а сигналізує застосунку, щоб показати попередження користувачу.
+function safeSetItem(key, value) {
+  try {
+    safeSetItem(key, value);
+    return true;
+  } catch (e) {
+    console.error(`localStorage setItem failed for "${key}":`, e);
+    const isQuota = e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014);
+    if (isQuota && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('nutrisnap-storage-full', { detail: { key } }));
+    }
+    return false;
+  }
+}
+
+function safeRemoveItem(key) {
+  try {
+    safeRemoveItem(key);
+  } catch (e) {
+    console.error(`localStorage removeItem failed for "${key}":`, e);
+  }
+}
 const PRODUCT_IMPORT_FIELDS = {
   name: ["name", "назва", "продукт", "title"],
   brand: ["brand", "бренд", "виробник"],
@@ -475,6 +499,15 @@ export default function App() {
     }
   });
 
+  // Показувати трекер води (вимкнено за замовчуванням)
+  const [showWaterTracker, setShowWaterTracker] = useState(() => {
+    try {
+      return localStorage.getItem('nutrisnap_show_water') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   // Профіль користувача та цілі КБЖВ
   const [profile, setProfile] = useState(() => {
     try {
@@ -568,7 +601,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_favorites', JSON.stringify(favorites));
+    safeSetItem('nutrisnap_favorites', JSON.stringify(favorites));
   }, [favorites]);
 
   useEffect(() => {
@@ -863,47 +896,51 @@ export default function App() {
 
   // --- Sync to LocalStorage ---
   useEffect(() => {
-    localStorage.setItem('nutrisnap_meals', JSON.stringify(meals));
+    safeSetItem('nutrisnap_meals', JSON.stringify(meals));
   }, [meals]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_water', JSON.stringify(waterIntake));
+    safeSetItem('nutrisnap_water', JSON.stringify(waterIntake));
   }, [waterIntake]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_profile', JSON.stringify(profile));
+    safeSetItem('nutrisnap_show_water', String(showWaterTracker));
+  }, [showWaterTracker]);
+
+  useEffect(() => {
+    safeSetItem('nutrisnap_profile', JSON.stringify(profile));
   }, [profile]);
 
   useEffect(() => {
     if (apiKey === SERVER_GEMINI_API_KEY) {
-      localStorage.removeItem('nutrisnap_apikey');
+      safeRemoveItem('nutrisnap_apikey');
     } else {
-      localStorage.setItem('nutrisnap_apikey', apiKey.trim());
+      safeSetItem('nutrisnap_apikey', apiKey.trim());
     }
   }, [apiKey]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_openai_apikey', openAiApiKey.trim());
+    safeSetItem('nutrisnap_openai_apikey', openAiApiKey.trim());
   }, [openAiApiKey]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_openai_proxy_url', openAiProxyUrl.trim());
+    safeSetItem('nutrisnap_openai_proxy_url', openAiProxyUrl.trim());
   }, [openAiProxyUrl]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_scanmode', scanMode);
+    safeSetItem('nutrisnap_scanmode', scanMode);
   }, [scanMode]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_geminimodel', geminiModel);
+    safeSetItem('nutrisnap_geminimodel', geminiModel);
   }, [geminiModel]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_openai_model', openAiModel);
+    safeSetItem('nutrisnap_openai_model', openAiModel);
   }, [openAiModel]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_theme', theme);
+    safeSetItem('nutrisnap_theme', theme);
     const bodyClass = document.body.classList;
     if (theme === 'light') {
       bodyClass.add('light-mode');
@@ -921,6 +958,18 @@ export default function App() {
     return () => window.removeEventListener('nutrisnap-update-available', handleUpdateAvailable);
   }, []);
 
+  useEffect(() => {
+    const handleStorageFull = () => {
+      showToast(
+        'Сховище пристрою переповнене. Старі записи можуть не зберігатися — експортуйте резервну копію та видаліть давню історію.',
+        'error',
+        { duration: 7000 }
+      );
+    };
+    window.addEventListener('nutrisnap-storage-full', handleStorageFull);
+    return () => window.removeEventListener('nutrisnap-storage-full', handleStorageFull);
+  }, []);
+
   const applyAppUpdate = () => {
     const waitingWorker = updateRegistration?.waiting;
     if (waitingWorker) {
@@ -931,15 +980,15 @@ export default function App() {
   };
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_custom_barcodes', JSON.stringify(customBarcodes));
+    safeSetItem('nutrisnap_custom_barcodes', JSON.stringify(customBarcodes));
   }, [customBarcodes]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_custom_foods', JSON.stringify(customFoods));
+    safeSetItem('nutrisnap_custom_foods', JSON.stringify(customFoods));
   }, [customFoods]);
 
   useEffect(() => {
-    localStorage.setItem('nutrisnap_food_portions', JSON.stringify(rememberedFoodPortions));
+    safeSetItem('nutrisnap_food_portions', JSON.stringify(rememberedFoodPortions));
   }, [rememberedFoodPortions]);
 
   useEffect(() => {
@@ -1082,17 +1131,21 @@ export default function App() {
     }
 
     const constraints1 = {
-      video: { 
+      video: {
         facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        focusMode: { ideal: 'continuous' },
+        advanced: [{ focusMode: 'continuous' }]
       },
       audio: false
     };
 
     const constraints2 = {
-      video: { 
-        facingMode: 'environment'
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       },
       audio: false
     };
@@ -1127,6 +1180,22 @@ export default function App() {
     try {
       setCameraStream(stream);
       setCameraActive(true);
+
+      // Спроба ввімкнути неперервний автофокус на Android (best-effort)
+      try {
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        const advanced = [];
+        if (caps.focusMode && caps.focusMode.includes('continuous')) {
+          advanced.push({ focusMode: 'continuous' });
+        }
+        if (advanced.length) {
+          await track.applyConstraints({ advanced });
+        }
+      } catch (focusErr) {
+        console.warn('Autofocus constraint not supported:', focusErr);
+      }
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         try {
@@ -1338,7 +1407,7 @@ export default function App() {
     const video = videoRef.current;
     const sourceWidth = video.videoWidth || 640;
     const sourceHeight = video.videoHeight || 480;
-    const maxSide = 960;
+    const maxSide = 1280;
     const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(sourceWidth * scale);
@@ -1347,7 +1416,7 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const base64Data = canvas.toDataURL('image/jpeg', 0.62);
+    const base64Data = canvas.toDataURL('image/jpeg', 0.82);
     triggerScan(base64Data);
   };
 
@@ -1362,8 +1431,8 @@ export default function App() {
           let width = img.width;
           let height = img.height;
           
-          // Обмежуємо максимальний розмір до 800px
-          const max_size = 800;
+          // Обмежуємо максимальний розмір до 1280px (баланс деталь/розмір)
+          const max_size = 1280;
           if (width > height) {
             if (width > max_size) {
               height *= max_size / width;
@@ -1381,8 +1450,8 @@ export default function App() {
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
           
-          // Стискаємо до якості 70% для швидкого завантаження
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          // Якість 82% — достатньо чітко для читання етикеток
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
           resolve(dataUrl);
         };
         img.onerror = (err) => reject(err);
@@ -2980,6 +3049,7 @@ export default function App() {
             </div>
 
             {/* Water Tracker */}
+            {showWaterTracker && (
             <div className="glass-card water-tracker-card">
               <div className="water-left">
                 <div className="water-icon-box" style={{ overflow: 'visible', position: 'relative' }}>
@@ -3074,6 +3144,7 @@ export default function App() {
                 </button>
               </div>
             </div>
+            )}
 
             {/* Favorites Scroll Tray */}
             {favorites.length > 0 && (
@@ -5500,7 +5571,25 @@ export default function App() {
         {activeTab === 'settings' && (
           <div>
             <h2 className="section-title">Налаштування додатку</h2>
-            
+
+            {/* Interface Settings Card */}
+            <div className="glass-card">
+              <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                Інтерфейс
+              </h3>
+              <div className="settings-group">
+                <label className="settings-row" style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="settings-label" style={{ marginBottom: 0 }}>Показувати трекер води</span>
+                  <input
+                    type="checkbox"
+                    checked={showWaterTracker}
+                    onChange={(e) => setShowWaterTracker(e.target.checked)}
+                    style={{ width: '20px', height: '20px', accentColor: 'var(--color-accent)', cursor: 'pointer' }}
+                  />
+                </label>
+              </div>
+            </div>
+
             {/* AI Scanner Configuration Card */}
             <div className="glass-card">
               <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -5589,7 +5678,7 @@ export default function App() {
                               }}
                               onClick={() => {
                                 setScanMode('mock');
-                                localStorage.setItem('nutrisnap_scanmode', 'mock');
+                                safeSetItem('nutrisnap_scanmode', 'mock');
                                 showToast("Режим сканування змінено на Симуляцію", "info");
                               }}
                               onMouseOver={(e) => {
@@ -5619,8 +5708,8 @@ export default function App() {
                         value={openAiModel}
                         onChange={(e) => setOpenAiModel(e.target.value)}
                       >
-                        <option value="gpt-5.5">GPT-5.5 (Точніше)</option>
-                        <option value="gpt-4.1-mini">GPT-4.1 Mini (Швидше)</option>
+                        <option value="gpt-4o">GPT-4o (Точніше)</option>
+                        <option value="gpt-4o-mini">GPT-4o Mini (Швидше)</option>
                       </select>
                     </div>
 
@@ -5685,7 +5774,7 @@ export default function App() {
                               }}
                               onClick={() => {
                                 setScanMode('mock');
-                                localStorage.setItem('nutrisnap_scanmode', 'mock');
+                                safeSetItem('nutrisnap_scanmode', 'mock');
                                 showToast("Режим сканування змінено на Симуляцію", "info");
                               }}
                             >
