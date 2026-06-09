@@ -79,6 +79,72 @@ const normalizeSearchText = (value = '') =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const areBrandAndSupermarketEquivalent = (brand, supermarket) => {
+  if (!brand || !supermarket) return false;
+  const b = brand.toLowerCase().trim();
+  const s = supermarket.toLowerCase().trim();
+  if (b === s) return true;
+  
+  const equivalents = [
+    ['auchan', 'ашан'],
+    ['silpo', 'сільпо'],
+    ['metro', 'метро'],
+    ['atb', 'атб'],
+    ['fora', 'фора'],
+    ['novus', 'новус'],
+    ['varus', 'варус'],
+    ['rukavychka', 'рукавичка'],
+    ['blyzenko', 'близенько']
+  ];
+  
+  for (const pair of equivalents) {
+    if ((b.includes(pair[0]) || b.includes(pair[1])) && (s.includes(pair[0]) || s.includes(pair[1]))) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const shouldShowBrandPrefix = (food, isSupermarketShown) => {
+  if (!food.brand) return false;
+  
+  const brandLower = food.brand.toLowerCase();
+  
+  // 1. If product name already contains the brand, don't repeat it
+  if (food.name.toLowerCase().includes(brandLower)) {
+    return false;
+  }
+  
+  // 2. If supermarket badge is displayed and it is equivalent to the brand
+  if (isSupermarketShown && food.supermarket) {
+    if (areBrandAndSupermarketEquivalent(food.brand, food.supermarket)) {
+      return false;
+    }
+  }
+  
+  return true;
+};
+
+const getSupermarketColor = (supermarket) => {
+  if (!supermarket) return '#8b5cf6';
+  const sm = supermarket.toLowerCase();
+  if (sm.includes('атб') || sm.includes('atb')) return '#3b82f6';
+  if (sm.includes('сільпо') || sm.includes('silpo')) return '#f97316';
+  if (sm.includes('рукавичка') || sm.includes('rukavychka')) return '#dc2626';
+  if (sm.includes('близенько') || sm.includes('blyzenko')) return '#10b981';
+  return '#8b5cf6';
+};
+
+const getSupermarketClass = (supermarket) => {
+  if (!supermarket) return 'supermarket-general';
+  const sm = supermarket.toLowerCase();
+  if (sm.includes('атб') || sm.includes('atb')) return 'supermarket-atb';
+  if (sm.includes('сільпо') || sm.includes('silpo')) return 'supermarket-silpo';
+  if (sm.includes('рукавичка') || sm.includes('rukavychka')) return 'supermarket-rukavychka';
+  if (sm.includes('близенько') || sm.includes('blyzenko')) return 'supermarket-blyzenko';
+  return 'supermarket-general';
+};
+
 const getFoodSearchText = (food) =>
   normalizeSearchText([
     food.name,
@@ -4196,7 +4262,7 @@ export default function App() {
                                 {food.name}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал
+                                {shouldShowBrandPrefix(food, false) ? `${food.brand} • ` : ''}{food.calories} ккал
                               </span>
                             </div>
                           </div>
@@ -4321,82 +4387,72 @@ export default function App() {
                   ) : (
                     <>
                       {/* Local Results */}
-                      {filteredSearchFoods.map(food => (
-                        <div
-                          key={food.id}
-                          className="search-food-item"
-                          onClick={() => {
-                            selectSearchFood(food);
-                          }}
-                        >
-                          <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🥗'}</span>
-                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
-                            <span
-                              onClick={(event) => {
-                                if (food.isCustom || food.isCustomBarcode) {
+                      {filteredSearchFoods.map(food => {
+                        const borderCol = food.supermarket ? getSupermarketColor(food.supermarket) : undefined;
+                        const badgeClass = food.supermarket ? getSupermarketClass(food.supermarket) : '';
+
+                        return (
+                          <div
+                            key={food.id}
+                            className="search-food-item"
+                            style={borderCol ? { borderLeft: `4px solid ${borderCol}` } : undefined}
+                            onClick={() => {
+                              selectSearchFood(food);
+                            }}
+                          >
+                            <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🥗'}</span>
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
+                              <span
+                                onClick={(event) => {
+                                  if (food.isCustom || food.isCustomBarcode) {
+                                    event.stopPropagation();
+                                    openCustomFoodEditor(food);
+                                  }
+                                }}
+                                title={food.isCustom || food.isCustomBarcode ? "Редагувати КБЖВ" : undefined}
+                                style={{
+                                  fontWeight: 600,
+                                  fontSize: '14px',
+                                  color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)',
+                                  cursor: food.isCustom || food.isCustomBarcode ? 'pointer' : 'default'
+                                }}
+                              >
+                                {food.name}
+                              </span>
+                              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                                {shouldShowBrandPrefix(food, !!food.supermarket) ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                              </span>
+                            </div>
+                            {(food.isCustom || food.isCustomBarcode) && (
+                              <button
+                                type="button"
+                                className="search-edit-btn"
+                                onClick={(event) => {
                                   event.stopPropagation();
                                   openCustomFoodEditor(food);
-                                }
-                              }}
-                              title={food.isCustom || food.isCustomBarcode ? "Редагувати КБЖВ" : undefined}
-                              style={{
-                                fontWeight: 600,
-                                fontSize: '14px',
-                                color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)',
-                                cursor: food.isCustom || food.isCustomBarcode ? 'pointer' : 'default'
-                              }}
-                            >
-                              {food.name}
-                            </span>
-                            <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                              {food.brand ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
-                            </span>
+                                }}
+                                title="Редагувати КБЖВ"
+                                aria-label="Редагувати КБЖВ"
+                              >
+                                <Pencil size={15} />
+                              </button>
+                            )}
+                            {getFoodUsageCount(food) > 0 && (
+                              <span className="search-brand-badge search-usage-badge">
+                                {getFoodUsageCount(food)}x
+                              </span>
+                            )}
+                            {food.supermarket ? (
+                              <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket}</span>
+                            ) : food.brand ? (
+                              <span className="search-brand-badge">{food.brand}</span>
+                            ) : null}
                           </div>
-                          {(food.isCustom || food.isCustomBarcode) && (
-                            <button
-                              type="button"
-                              className="search-edit-btn"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openCustomFoodEditor(food);
-                              }}
-                              title="Редагувати КБЖВ"
-                              aria-label="Редагувати КБЖВ"
-                            >
-                              <Pencil size={15} />
-                            </button>
-                          )}
-                          {getFoodUsageCount(food) > 0 && (
-                            <span className="search-brand-badge search-usage-badge">
-                              {getFoodUsageCount(food)}x
-                            </span>
-                          )}
-                          {food.brand && <span className="search-brand-badge">{food.brand}</span>}
-                        </div>
-                      ))}
+                        );
+                      })}
 
                       {/* AI Supermarket Results */}
                       {filteredAiSearchFoods.map(food => {
-                        const getSupermarketColor = (supermarket) => {
-                          if (!supermarket) return '#8b5cf6';
-                          const sm = supermarket.toLowerCase();
-                          if (sm.includes('атб') || sm.includes('atb')) return '#3b82f6';
-                          if (sm.includes('сільпо') || sm.includes('silpo')) return '#f97316';
-                          if (sm.includes('рукавичка') || sm.includes('rukavychka')) return '#dc2626';
-                          if (sm.includes('близенько') || sm.includes('blyzenko')) return '#10b981';
-                          return '#8b5cf6';
-                        };
-
-                        const getSupermarketClass = (supermarket) => {
-                          if (!supermarket) return 'supermarket-general';
-                          const sm = supermarket.toLowerCase();
-                          if (sm.includes('атб') || sm.includes('atb')) return 'supermarket-atb';
-                          if (sm.includes('сільпо') || sm.includes('silpo')) return 'supermarket-silpo';
-                          if (sm.includes('рукавичка') || sm.includes('rukavychka')) return 'supermarket-rukavychka';
-                          if (sm.includes('близенько') || sm.includes('blyzenko')) return 'supermarket-blyzenko';
-                          return 'supermarket-general';
-                        };
-
                         const borderCol = getSupermarketColor(food.supermarket);
                         const badgeClass = getSupermarketClass(food.supermarket);
 
@@ -4422,7 +4478,7 @@ export default function App() {
                                 {food.name}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {food.brand ? `${food.brand} • ` : ''}ШІ-підказка назви, КБЖВ внесіть вручну
+                                {shouldShowBrandPrefix(food, true) ? `${food.brand} • ` : ''}ШІ-підказка назви, КБЖВ внесіть вручну
                               </span>
                             </div>
                             <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket || "ШІ"}</span>
@@ -4453,7 +4509,7 @@ export default function App() {
                               {food.name}
                             </span>
                             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                              {food.brand ? `${food.brand} • ` : ''}Зовнішня база: КБЖВ підтвердіть з етикетки
+                              {shouldShowBrandPrefix(food, true) ? `${food.brand} • ` : ''}Зовнішня база: КБЖВ підтвердіть з етикетки
                             </span>
                           </div>
                           <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>{food.sourceLabel || "База OFF"}</span>
