@@ -29,3 +29,10 @@ dist-ssr
 scratch/
 *.bak
 
+# Сторонні проєкти - ніколи не комітити
+Promowatch/
+ai-news-bot/
+matchsense-ai/
+matchsense-dashboard/
+valuebet-bot/
+

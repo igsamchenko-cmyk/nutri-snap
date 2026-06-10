@@ -39,33 +39,27 @@ export default {
       return jsonResponse({ error: { message: 'OPENAI_API_KEY is not configured' } }, 500, corsHeaders);
     }
 
-    // ── Rate limiting via Workers Cache API ──────────────────────────────────
+    // ── Rate limiting via Workers KV ─────────────────────────────────────────
     const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
     const windowKey = Math.floor(Date.now() / 1000 / WINDOW_SECONDS);
-    const cacheKey = new Request(`https://rate-limit.internal/${windowKey}/${ip}`);
+    const kvKey = `rl:${windowKey}:${ip}`;
 
-    let count = 0;
-    const cache = caches.default;
-    const cached = await cache.match(cacheKey);
-    if (cached) {
-      count = parseInt(await cached.text(), 10) || 0;
-    }
+    if (env.RATE_LIMIT) {
+      const count = parseInt(await env.RATE_LIMIT.get(kvKey), 10) || 0;
 
-    if (count >= MAX_REQUESTS) {
-      const retryAfter = WINDOW_SECONDS - (Math.floor(Date.now() / 1000) % WINDOW_SECONDS);
-      return jsonResponse(
-        { error: { message: `Перевищено ліміт: ${MAX_REQUESTS} запитів/годину. Спробуйте через ${Math.ceil(retryAfter / 60)} хв.` } },
-        429,
-        { ...corsHeaders, 'Retry-After': String(retryAfter) }
+      if (count >= MAX_REQUESTS) {
+        const retryAfter = WINDOW_SECONDS - (Math.floor(Date.now() / 1000) % WINDOW_SECONDS);
+        return jsonResponse(
+          { error: { message: `Перевищено ліміт: ${MAX_REQUESTS} запитів/годину. Спробуйте через ${Math.ceil(retryAfter / 60)} хв.` } },
+          429,
+          { ...corsHeaders, 'Retry-After': String(retryAfter) }
+        );
+      }
+
+      ctx.waitUntil(
+        env.RATE_LIMIT.put(kvKey, String(count + 1), { expirationTtl: WINDOW_SECONDS + 60 })
       );
     }
-
-    // Increment counter asynchronously (non-blocking)
-    ctx.waitUntil(
-      cache.put(cacheKey, new Response(String(count + 1), {
-        headers: { 'Cache-Control': `max-age=${WINDOW_SECONDS}` }
-      }))
-    );
     // ────────────────────────────────────────────────────────────────────────
 
     try {

@@ -1,6 +1,11 @@
 name = "nutrisnap-openai-proxy"
 main = "workers/openai-proxy.js"
 compatibility_date = "2025-01-01"
+workers_dev = true
 
 [vars]
 ALLOWED_ORIGIN = "https://igsamchenko-cmyk.github.io"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "fbe38d1a4e14402a8ecdc361c6c7ae66"

@@ -5,16 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores([
-    'dist',
-    'Promowatch/**',
-    'ai-news-bot/**',
-    'matchsense-ai/**',
-    'matchsense-dashboard/**',
-    'valuebet-bot/**',
-    'scratch/**',
-    'script/**'
-  ]),
+  globalIgnores(['dist', 'scratch/**']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
