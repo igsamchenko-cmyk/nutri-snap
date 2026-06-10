@@ -3414,21 +3414,6 @@ body.light-mode .autocomplete-item:hover {
   background-color: rgba(0, 0, 0, 0.04);
 }
 
-/* Custom styling to make html5-qrcode video cover the preview container */
-#barcode-reader-container video {
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: cover !important;
-}
-
-#barcode-reader-container {
-  width: 100%;
-  height: 100%;
-  position: absolute;
-  top: 0;
-  left: 0;
-}
-
 /* Global Modal & Overlay Styles */
 .modal-backdrop {
   position: fixed;

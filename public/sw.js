@@ -39,6 +39,10 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
   if (event.request.url.includes('googleapis.com')) {
     return;
   }
@@ -83,6 +87,11 @@ self.addEventListener('fetch', (event) => {
           return response;
         });
       })
-      .catch(() => caches.match(`${BASE_PATH}/index.html`))
+      .catch((err) => {
+        if (event.request.mode === 'navigate') {
+          return caches.match(`${BASE_PATH}/index.html`);
+        }
+        throw err;
+      })
   );
 });

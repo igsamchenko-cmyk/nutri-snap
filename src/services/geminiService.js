@@ -90,13 +90,19 @@ async function requestGeminiContent(modelName, payload, apiKey) {
   const useServerKey = apiKey === SERVER_GEMINI_API_KEY;
   const url = useServerKey
     ? `/api/gemini/${encodeURIComponent(modelName)}`
-    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey.trim()}`;
+    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+
+  const headers = {
+    "Content-Type": "application/json"
+  };
+
+  if (!useServerKey) {
+    headers["x-goog-api-key"] = apiKey.trim();
+  }
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers,
     body: JSON.stringify(payload)
   });
 

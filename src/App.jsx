@@ -49,6 +49,25 @@ import {
 import { mockFoods } from './data/mockFood';
 import { productCatalog } from './data/products';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
+import { safeSetItem, safeRemoveItem } from './utils/storage';
+import {
+  PRODUCT_IMPORT_FIELDS,
+  parseCsvText,
+  normalizeImportHeader,
+  getImportField,
+  numberFromImport,
+  aliasesFromImport,
+  rowsFromProductImport,
+  normalizeImportedProduct,
+  parseLocalDate,
+  getTodayString,
+  createMealId,
+  formatDateLabel,
+  getDashboardTitle,
+  calculateBMR,
+  getActivityMultiplier
+} from './utils';
+import useLocalStorageState from './hooks/useLocalStorageState';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
@@ -56,45 +75,6 @@ const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' :
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
-
-// Безпечний запис у localStorage: не валить рендер при переповненні квоти,
-// а сигналізує застосунку, щоб показати попередження користувачу.
-function safeSetItem(key, value) {
-  try {
-    safeSetItem(key, value);
-    return true;
-  } catch (e) {
-    console.error(`localStorage setItem failed for "${key}":`, e);
-    const isQuota = e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014);
-    if (isQuota && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('nutrisnap-storage-full', { detail: { key } }));
-    }
-    return false;
-  }
-}
-
-function safeRemoveItem(key) {
-  try {
-    safeRemoveItem(key);
-  } catch (e) {
-    console.error(`localStorage removeItem failed for "${key}":`, e);
-  }
-}
-const PRODUCT_IMPORT_FIELDS = {
-  name: ["name", "назва", "продукт", "title"],
-  brand: ["brand", "бренд", "виробник"],
-  supermarket: ["supermarket", "магазин", "мережа"],
-  category: ["category", "категорія"],
-  calories: ["calories", "kcal", "ккал", "калорії"],
-  protein: ["protein", "білки"],
-  fat: ["fat", "жири"],
-  carbs: ["carbs", "вуглеводи"],
-  weight: ["weight", "вага", "порція"],
-  barcode: ["barcode", "штрихкод", "штрих-код"],
-  aliases: ["aliases", "синоніми"],
-  ingredients: ["ingredients", "склад"],
-  icon: ["icon", "emoji"]
-};
 
 const normalizeSearchText = (value = '') =>
   String(value)
@@ -278,175 +258,7 @@ const findBestFoodMatchByName = (foodName, foods) => {
   return bestScore >= 45 ? bestMatch : null;
 };
 
-const parseCsvText = (text) => {
-  const rows = [];
-  let row = [];
-  let cell = "";
-  let inQuotes = false;
 
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    const next = text[i + 1];
-
-    if (char === '"' && inQuotes && next === '"') {
-      cell += '"';
-      i += 1;
-    } else if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === "," && !inQuotes) {
-      row.push(cell);
-      cell = "";
-    } else if ((char === "\n" || char === "\r") && !inQuotes) {
-      if (char === "\r" && next === "\n") i += 1;
-      row.push(cell);
-      if (row.some(value => value.trim())) rows.push(row);
-      row = [];
-      cell = "";
-    } else {
-      cell += char;
-    }
-  }
-
-  row.push(cell);
-  if (row.some(value => value.trim())) rows.push(row);
-  return rows;
-};
-
-const normalizeImportHeader = (value = "") => String(value).replace(/^\uFEFF/, "").trim().toLowerCase().replace(/\s+/g, " ");
-
-const getImportField = (row, field) => {
-  const aliases = PRODUCT_IMPORT_FIELDS[field] || [field];
-  for (const alias of aliases) {
-    const value = row[normalizeImportHeader(alias)];
-    if (value !== undefined && String(value).trim() !== "") return value;
-  }
-  return "";
-};
-
-const numberFromImport = (value, fallback = 0) => {
-  if (value === "" || value === null || value === undefined) return fallback;
-  const parsed = Number(String(value).replace(",", ".").trim());
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-const aliasesFromImport = (value) => String(value || "")
-  .split(/[;|]/)
-  .map(item => item.trim())
-  .filter(Boolean);
-
-const rowsFromProductImport = (text, fileName = "") => {
-  if (fileName.toLowerCase().endsWith(".json")) {
-    const data = JSON.parse(text);
-    const products = Array.isArray(data) ? data : [...(data.customFoods || []), ...Object.values(data.customBarcodes || {})];
-    return products.map(item => {
-      const row = {};
-      Object.entries(item || {}).forEach(([key, value]) => {
-        row[normalizeImportHeader(key)] = Array.isArray(value) ? value.join(";") : String(value ?? "");
-      });
-      return row;
-    });
-  }
-
-  const [headers, ...rows] = parseCsvText(text);
-  if (!headers?.length) return [];
-  const normalizedHeaders = headers.map(normalizeImportHeader);
-  return rows.map(values => {
-    const row = {};
-    normalizedHeaders.forEach((header, index) => {
-      row[header] = String(values[index] || "").trim();
-    });
-    return row;
-  });
-};
-
-const normalizeImportedProduct = (row, index) => {
-  const name = String(getImportField(row, "name") || "").trim();
-  if (!name) return null;
-
-  const baseWeight = Math.max(1, Math.round(numberFromImport(getImportField(row, "weight"), 100)));
-  const scaleTo100 = 100 / baseWeight;
-  const now = new Date().toISOString();
-  const barcode = String(getImportField(row, "barcode") || "").replace(/\D/g, "");
-  const brand = String(getImportField(row, "brand") || "").trim();
-  const supermarket = String(getImportField(row, "supermarket") || "").trim();
-  const aliases = aliasesFromImport(getImportField(row, "aliases"));
-
-  return {
-    id: barcode || `imported-${Date.now()}-${index}`,
-    barcode,
-    name,
-    brand: brand || "Моя база",
-    supermarket,
-    category: String(getImportField(row, "category") || "Інше").trim(),
-    calories: Math.round(numberFromImport(getImportField(row, "calories")) * scaleTo100),
-    protein: Math.round(numberFromImport(getImportField(row, "protein")) * scaleTo100 * 10) / 10,
-    fat: Math.round(numberFromImport(getImportField(row, "fat")) * scaleTo100 * 10) / 10,
-    carbs: Math.round(numberFromImport(getImportField(row, "carbs")) * scaleTo100 * 10) / 10,
-    weight: 100,
-    icon: String(getImportField(row, "icon") || "🏷️").trim(),
-    aliases,
-    ingredients: String(getImportField(row, "ingredients") || "").trim(),
-    source: barcode ? "manual-barcode-import" : "manual-import",
-    sourceLabel: barcode ? "Мій штрих-код" : "Моя база",
-    dataQuality: "manual",
-    searchText: [name, brand, supermarket, barcode, aliases.join(" "), "моя база імпорт"].filter(Boolean).join(" ").toLowerCase(),
-    createdAt: now,
-    updatedAt: now
-  };
-};
-
-// Локальне безпечне парсування дати типу YYYY-MM-DD для запобігання зсуву таймзон
-const parseLocalDate = (dateStr) => {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-};
-
-// Отримання поточної дати у форматі YYYY-MM-DD
-const getTodayString = (dateObj = new Date()) => {
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const day = String(dateObj.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-const createMealId = () => {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-};
-
-// Форматування дати для відображення в інтерфейсі (українською)
-const formatDateLabel = (dateStr) => {
-  const today = getTodayString();
-  const yesterday = getTodayString(new Date(Date.now() - 86400000));
-  const tomorrow = getTodayString(new Date(Date.now() + 86400000));
-  
-  if (dateStr === today) return 'Сьогодні';
-  if (dateStr === yesterday) return 'Вчора';
-  if (dateStr === tomorrow) return 'Завтра';
-
-  const date = parseLocalDate(dateStr);
-  const months = [
-    'січня', 'лютого', 'березня', 'квітня', 'травня', 'червня',
-    'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'
-  ];
-  return `${date.getDate()} ${months[date.getMonth()]}`;
-};
-
-// Створення динамічного заголовка для дашборду відповідно до дати
-const getDashboardTitle = (dateStr) => {
-  const today = getTodayString();
-  const yesterday = getTodayString(new Date(Date.now() - 86400000));
-  const tomorrow = getTodayString(new Date(Date.now() + 86400000));
-  
-  if (dateStr === today) return 'Сьогоднішній огляд';
-  if (dateStr === yesterday) return 'Огляд за вчора';
-  if (dateStr === tomorrow) return 'Огляд на завтра';
-  
-  return `Огляд за ${formatDateLabel(dateStr)}`;
-};
 
 export default function App() {
   // --- Global States ---
@@ -479,34 +291,11 @@ export default function App() {
   const aiSearchInFlightKeyRef = useRef('');
   
   // Дані страв та води (ініціалізація з localStorage)
-  const [meals, setMeals] = useState(() => {
-    try {
-      const saved = localStorage.getItem('nutrisnap_meals');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      console.error("Error reading nutrisnap_meals:", e);
-      return [];
-    }
-  });
-  
-  const [waterIntake, setWaterIntake] = useState(() => {
-    try {
-      const saved = localStorage.getItem('nutrisnap_water');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) {
-      console.error("Error reading nutrisnap_water:", e);
-      return {};
-    }
-  });
+  const [meals, setMeals] = useLocalStorageState('nutrisnap_meals', []);
+  const [waterIntake, setWaterIntake] = useLocalStorageState('nutrisnap_water', {});
 
   // Показувати трекер води (вимкнено за замовчуванням)
-  const [showWaterTracker, setShowWaterTracker] = useState(() => {
-    try {
-      return localStorage.getItem('nutrisnap_show_water') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [showWaterTracker, setShowWaterTracker] = useLocalStorageState('nutrisnap_show_water', false);
 
   // Профіль користувача та цілі КБЖВ
   const [profile, setProfile] = useState(() => {
@@ -550,59 +339,17 @@ export default function App() {
       return DEFAULT_API_KEY;
     }
   });
-  const [openAiApiKey, setOpenAiApiKey] = useState(() => {
-    try {
-      return localStorage.getItem('nutrisnap_openai_apikey') || '';
-    } catch {
-      return '';
-    }
-  });
-  const [openAiProxyUrl, setOpenAiProxyUrl] = useState(() => {
-    try {
-      return localStorage.getItem('nutrisnap_openai_proxy_url') || DEFAULT_OPENAI_PROXY_URL;
-    } catch {
-      return DEFAULT_OPENAI_PROXY_URL;
-    }
-  });
-  const [scanMode, setScanMode] = useState(() => {
-    try {
-      return localStorage.getItem('nutrisnap_scanmode') || (DEFAULT_API_KEY ? 'gemini' : 'mock');
-    } catch {
-      return DEFAULT_API_KEY ? 'gemini' : 'mock';
-    }
-  });
-  const [geminiModel, setGeminiModel] = useState(() => {
-    try {
-      return localStorage.getItem('nutrisnap_geminimodel') || 'gemini-2.5-flash';
-    } catch (e) {
-      return 'gemini-2.5-flash';
-    }
-  });
-  const [openAiModel, setOpenAiModel] = useState(() => {
-    try {
-      return localStorage.getItem('nutrisnap_openai_model') || DEFAULT_OPENAI_MODEL;
-    } catch {
-      return DEFAULT_OPENAI_MODEL;
-    }
-  });
+  const [openAiApiKey, setOpenAiApiKey] = useLocalStorageState('nutrisnap_openai_apikey', '', { raw: true });
+  const [openAiProxyUrl, setOpenAiProxyUrl] = useLocalStorageState('nutrisnap_openai_proxy_url', DEFAULT_OPENAI_PROXY_URL, { raw: true });
+  const [scanMode, setScanMode] = useLocalStorageState('nutrisnap_scanmode', DEFAULT_API_KEY ? 'gemini' : 'mock', { raw: true });
+  const [geminiModel, setGeminiModel] = useLocalStorageState('nutrisnap_geminimodel', 'gemini-2.5-flash', { raw: true });
+  const [openAiModel, setOpenAiModel] = useLocalStorageState('nutrisnap_openai_model', DEFAULT_OPENAI_MODEL, { raw: true });
   const [updateRegistration, setUpdateRegistration] = useState(null);
 
   // --- Favorite Meals & Toast Notification States ---
-  const [favorites, setFavorites] = useState(() => {
-    try {
-      const saved = localStorage.getItem('nutrisnap_favorites');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      console.error("Error reading nutrisnap_favorites:", e);
-      return [];
-    }
-  });
+  const [favorites, setFavorites] = useLocalStorageState('nutrisnap_favorites', []);
 
   const [toast, setToast] = useState(null);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_favorites', JSON.stringify(favorites));
-  }, [favorites]);
 
   useEffect(() => {
     if (toast) {
@@ -768,35 +515,9 @@ export default function App() {
   const [isBarcodeScanning, setIsBarcodeScanning] = useState(false);
 
   // --- States for Custom Barcodes & Custom Foods ---
-  const [customBarcodes, setCustomBarcodes] = useState(() => {
-    try {
-      const saved = localStorage.getItem('nutrisnap_custom_barcodes');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) {
-      console.error("Failed to load custom barcodes:", e);
-      return {};
-    }
-  });
-
-  const [customFoods, setCustomFoods] = useState(() => {
-    try {
-      const saved = localStorage.getItem('nutrisnap_custom_foods');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      console.error("Failed to load custom foods:", e);
-      return [];
-    }
-  });
-
-  const [rememberedFoodPortions, setRememberedFoodPortions] = useState(() => {
-    try {
-      const saved = localStorage.getItem('nutrisnap_food_portions');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) {
-      console.error("Failed to load remembered portions:", e);
-      return {};
-    }
-  });
+  const [customBarcodes, setCustomBarcodes] = useLocalStorageState('nutrisnap_custom_barcodes', {});
+  const [customFoods, setCustomFoods] = useLocalStorageState('nutrisnap_custom_foods', []);
+  const [rememberedFoodPortions, setRememberedFoodPortions] = useLocalStorageState('nutrisnap_food_portions', {});
 
   const [isCustomFoodModalOpen, setIsCustomFoodModalOpen] = useState(false);
   const [customFoodName, setCustomFoodName] = useState('');
@@ -896,18 +617,6 @@ export default function App() {
 
   // --- Sync to LocalStorage ---
   useEffect(() => {
-    safeSetItem('nutrisnap_meals', JSON.stringify(meals));
-  }, [meals]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_water', JSON.stringify(waterIntake));
-  }, [waterIntake]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_show_water', String(showWaterTracker));
-  }, [showWaterTracker]);
-
-  useEffect(() => {
     safeSetItem('nutrisnap_profile', JSON.stringify(profile));
   }, [profile]);
 
@@ -918,26 +627,6 @@ export default function App() {
       safeSetItem('nutrisnap_apikey', apiKey.trim());
     }
   }, [apiKey]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_openai_apikey', openAiApiKey.trim());
-  }, [openAiApiKey]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_openai_proxy_url', openAiProxyUrl.trim());
-  }, [openAiProxyUrl]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_scanmode', scanMode);
-  }, [scanMode]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_geminimodel', geminiModel);
-  }, [geminiModel]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_openai_model', openAiModel);
-  }, [openAiModel]);
 
   useEffect(() => {
     safeSetItem('nutrisnap_theme', theme);
@@ -979,17 +668,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    safeSetItem('nutrisnap_custom_barcodes', JSON.stringify(customBarcodes));
-  }, [customBarcodes]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_custom_foods', JSON.stringify(customFoods));
-  }, [customFoods]);
-
-  useEffect(() => {
-    safeSetItem('nutrisnap_food_portions', JSON.stringify(rememberedFoodPortions));
-  }, [rememberedFoodPortions]);
 
   useEffect(() => {
     const handleDocumentClick = () => {
@@ -2568,28 +2246,7 @@ export default function App() {
     showToast(`Скопійовано ${categoryName} (${newMeals.length} шт.)`, "success");
   };
 
-  // Зміна цільових КБЖВ при зміні ваги або цілі
-  // Розрахунок BMR за формулою Харріса-Бенедикта та TDEE
-  const calculateBMR = useCallback((w, h, a, g) => {
-    const weight = Number(w) || 70;
-    const height = Number(h) || 170;
-    const age = Number(a) || 25;
-    if (g === 'female') {
-      return Math.round(447.593 + 9.247 * weight + 3.098 * height - 4.330 * age);
-    }
-    return Math.round(88.362 + 13.397 * weight + 4.799 * height - 5.677 * age);
-  }, []);
 
-  const getActivityMultiplier = (level) => {
-    const multipliers = {
-      sedentary: 1.2,
-      light: 1.375,
-      moderate: 1.55,
-      active: 1.725,
-      veryActive: 1.9
-    };
-    return multipliers[level] || 1.55;
-  };
 
   const handleProfileChange = (key, value) => {
     const updated = { ...profile, [key]: value };

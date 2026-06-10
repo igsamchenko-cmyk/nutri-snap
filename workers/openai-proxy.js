@@ -69,13 +69,30 @@ export default {
     // ────────────────────────────────────────────────────────────────────────
 
     try {
+      const body = await request.text();
+      if (body.length > 2_000_000) {
+        return jsonResponse({ error: { message: 'Payload too large' } }, 413, corsHeaders);
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return jsonResponse({ error: { message: 'Invalid JSON' } }, 400, corsHeaders);
+      }
+
+      const ALLOWED_MODELS = ['gpt-4o', 'gpt-4o-mini'];
+      if (!parsed.model || !ALLOWED_MODELS.includes(parsed.model)) {
+        return jsonResponse({ error: { message: `Model ${parsed.model} is not allowed` } }, 400, corsHeaders);
+      }
+
       const openAiResponse = await fetch(OPENAI_RESPONSES_URL, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
           'Content-Type': 'application/json'
         },
-        body: await request.text()
+        body: JSON.stringify(parsed)
       });
 
       return new Response(await openAiResponse.text(), {
@@ -85,7 +102,8 @@ export default {
           'Content-Type': openAiResponse.headers.get('content-type') || 'application/json'
         }
       });
-    } catch {
+    } catch (e) {
+      console.error('OpenAI Proxy execution error:', e);
       return jsonResponse({ error: { message: 'OpenAI proxy request failed' } }, 502, corsHeaders);
     }
   }
@@ -94,6 +112,10 @@ export default {
 function getCorsHeaders(request, env) {
   const origin = request.headers.get('Origin');
   const allowedOrigins = getAllowedOrigins(env);
+
+  if (request.method !== 'OPTIONS' && !origin) {
+    return null;
+  }
 
   if (origin && !allowedOrigins.includes(origin)) {
     return null;
