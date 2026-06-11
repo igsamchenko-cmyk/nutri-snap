@@ -1,3 +1,5 @@
+import { downscaleImageToBase64 } from '../utils/imageUtils.js';
+
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 export const SERVER_OPENAI_API_KEY = '__nutrisnap_server_openai_key__';
 const DEFAULT_REASONING_EFFORT = 'low';
@@ -220,6 +222,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
 }
 
 export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-4o', proxyUrl = '') {
+  const base64ImageBytes = await downscaleImageToBase64(base64Data);
   const promptText = `
     Проаналізуй фото їжі українською мовою.
 
@@ -238,7 +241,7 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
         role: 'user',
         content: [
           { type: 'input_text', text: promptText },
-          { type: 'input_image', image_url: toImageUrl(base64Data) }
+          { type: 'input_image', image_url: toImageUrl(base64ImageBytes) }
         ]
       }
     ],
@@ -253,6 +256,7 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
 }
 
 export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-4o', proxyUrl = '') {
+  const base64ImageBytes = await downscaleImageToBase64(base64Data, 1600);
   const promptText = `
     Знайди на фото штрих-код продукту (EAN-13, EAN-8, UPC-A або UPC-E).
     Поверни тільки цифри штрих-коду. Якщо штрих-код не видно або він нечіткий, поверни null.
@@ -265,7 +269,7 @@ export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, model
         role: 'user',
         content: [
           { type: 'input_text', text: promptText },
-          { type: 'input_image', image_url: toImageUrl(base64Data) }
+          { type: 'input_image', image_url: toImageUrl(base64ImageBytes) }
         ]
       }
     ],

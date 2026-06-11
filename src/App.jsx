@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -48,8 +48,12 @@ import {
 } from './services/openaiService';
 import { mockFoods } from './data/mockFood';
 import { productCatalog } from './data/products';
+import { GEMINI_MODEL_OPTIONS } from './constants';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
+import BarcodeScanner from './components/BarcodeScanner';
 import { safeSetItem, safeRemoveItem } from './utils/storage';
+import { getLearnedProducts, mergeLearnedProducts, saveLearnedProduct, setLearnedProducts } from './utils/learnedProducts';
+import { exportProductsToFile, importProductsFromFile } from './utils/productShare';
 import {
   PRODUCT_IMPORT_FIELDS,
   parseCsvText,
@@ -362,6 +366,15 @@ export default function App() {
     setToast({ message, type, ...options });
   };
 
+  const refreshLearnedProducts = () => {
+    setLearnedProductsState(getLearnedProducts());
+  };
+
+  const rememberConfirmedProduct = (product, source) => {
+    saveLearnedProduct(product, source);
+    refreshLearnedProducts();
+  };
+
   const isFavorite = (name) => {
     if (!name) return false;
     return favorites.some(f => f.name.toLowerCase() === name.toLowerCase());
@@ -513,11 +526,13 @@ export default function App() {
   const [barcodeScannedCalories, setBarcodeScannedCalories] = useState(0);
   const [barcodeError, setBarcodeError] = useState(null);
   const [isBarcodeScanning, setIsBarcodeScanning] = useState(false);
+  const [isBarcodeLiveScannerOpen, setIsBarcodeLiveScannerOpen] = useState(false);
 
   // --- States for Custom Barcodes & Custom Foods ---
   const [customBarcodes, setCustomBarcodes] = useLocalStorageState('nutrisnap_custom_barcodes', {});
   const [customFoods, setCustomFoods] = useLocalStorageState('nutrisnap_custom_foods', []);
   const [rememberedFoodPortions, setRememberedFoodPortions] = useLocalStorageState('nutrisnap_food_portions', {});
+  const [learnedProducts, setLearnedProductsState] = useState(() => getLearnedProducts());
 
   const [isCustomFoodModalOpen, setIsCustomFoodModalOpen] = useState(false);
   const [customFoodName, setCustomFoodName] = useState('');
@@ -1019,6 +1034,7 @@ export default function App() {
       const localNutritionMatch = findBestFoodMatchByName(result.name, [
         ...Object.values(customBarcodes).map(food => ({ ...food, isCustomBarcode: true })),
         ...customFoods.map(food => ({ ...food, isCustom: true })),
+        ...learnedProducts.map(food => ({ ...food, isLearned: true })),
         ...productCatalog,
         ...mockFoods
       ]);
@@ -1257,6 +1273,16 @@ export default function App() {
     };
 
     rememberFoodPortion(scanResult, finalWeight);
+    if (!scanResult.isCustom && !scanResult.isCustomBarcode && !scanResult.isLearned) {
+      rememberConfirmedProduct({
+        ...scanResult,
+        calories: finalCalories,
+        protein: finalProtein,
+        fat: finalFat,
+        carbs: finalCarbs,
+        weight: finalWeight
+      }, scanResult.dataQuality === 'database_match' ? 'ai-photo-local-match' : 'ai-photo');
+    }
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     
@@ -1404,6 +1430,17 @@ export default function App() {
     } finally {
       setBarcodeLoading(false);
     }
+  };
+
+  const handleBarcodeDetectedLocally = async (barcodeVal) => {
+    setIsBarcodeLiveScannerOpen(false);
+    await triggerBarcodeSearchDirect(barcodeVal);
+  };
+
+  const handleBarcodeScannerFallback = () => {
+    setIsBarcodeLiveScannerOpen(false);
+    setCameraRequested(true);
+    setCameraError(null);
   };
 
   // Збереження нового продукту вручну без штрих-коду
@@ -1760,6 +1797,16 @@ export default function App() {
     };
 
     rememberFoodPortion(barcodeResult, finalWeight);
+    if (!barcodeResult.isCustom && !barcodeResult.isCustomBarcode && !barcodeResult.isLearned) {
+      rememberConfirmedProduct({
+        ...barcodeResult,
+        calories: finalCalories,
+        protein: finalProtein,
+        fat: finalFat,
+        carbs: finalCarbs,
+        weight: finalWeight
+      }, 'barcode');
+    }
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     showToast(`Продукт "${barcodeResult.name}" додано до щоденника!`, "success");
@@ -1808,6 +1855,21 @@ export default function App() {
     };
 
     rememberFoodPortion(selectedSearchFood, Number(searchFoodWeight));
+    if (
+      !selectedSearchFood.isCustom &&
+      !selectedSearchFood.isCustomBarcode &&
+      !selectedSearchFood.isLearned &&
+      (selectedSearchFood.isAiSearch || selectedSearchFood.source === 'openfoodfacts')
+    ) {
+      rememberConfirmedProduct({
+        ...selectedSearchFood,
+        calories: finalCalories,
+        protein: finalProtein,
+        fat: finalFat,
+        carbs: finalCarbs,
+        weight: Number(searchFoodWeight)
+      }, selectedSearchFood.source === 'openfoodfacts' ? 'barcode' : 'ai-search');
+    }
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
     showToast(`"${selectedSearchFood.name}" додано до щоденника!`, "success");
@@ -1855,7 +1917,9 @@ export default function App() {
         carbs: Number(p.carbs) || 0,
         weight: Number(p.weight) || 100,
         ingredients: p.ingredients || null,
-        icon: p.icon || "🔮"
+        icon: p.icon || "🔮",
+        isAiSearch: true,
+        source: 'ai-search'
       }));
 
       aiSearchCacheRef.current.set(cacheKey, {
@@ -1882,8 +1946,16 @@ export default function App() {
     }
   };
 
-  // Об'єднана база продуктів: вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
+  // Об'єднана база продуктів: learned + вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
   const combinedFoods = useMemo(() => [
+    ...learnedProducts.map(f => ({
+      ...f,
+      isLearned: true,
+      id: f.id || `learned-${f.name}`,
+      brand: f.brand || f.sourceLabel || "Збережено зі сканувань",
+      sourceLabel: f.sourceLabel || "🧠 Збережено зі сканувань",
+      icon: f.icon || "🍽️"
+    })),
     ...customFoods.map(f => ({ 
       ...f, 
       isCustom: true, 
@@ -1900,7 +1972,7 @@ export default function App() {
     })),
     ...productCatalog,
     ...mockFoods
-  ], [customFoods, customBarcodes]);
+  ], [learnedProducts, customFoods, customBarcodes]);
 
   const indexedCombinedFoods = useMemo(() => (
     combinedFoods.map((food, index) => ({
@@ -1934,7 +2006,7 @@ export default function App() {
     const usage = getFoodUsageCount(food);
     const normalizedName = normalizeSearchText(food.name);
 
-    if (food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual') score += 100000;
+    if (food.isCustom || food.isCustomBarcode || food.isLearned || food.source === 'manual' || food.dataQuality === 'manual') score += 100000;
     if (favoriteNameSet.has(normalizedName)) score += 600;
     if (usage > 0) score += Math.min(usage, 30) * 450;
     if (food.source === 'ua-core') score += 120;
@@ -2054,11 +2126,12 @@ export default function App() {
       demo: mockFoods.length,
       custom: customFoods.length,
       customBarcodes: Object.keys(customBarcodes).length,
+      learned: learnedProducts.length,
       verifiedCustom: verifiedCustomFoods + verifiedBarcodes,
-      total: productCatalog.length + mockFoods.length + customFoods.length + Object.keys(customBarcodes).length,
+      total: productCatalog.length + mockFoods.length + customFoods.length + Object.keys(customBarcodes).length + learnedProducts.length,
       topSources: Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 4)
     };
-  }, [customFoods, customBarcodes]);
+  }, [customFoods, customBarcodes, learnedProducts]);
   // Оновлення ваги страви з пропорційним перерахунком КБЖВ
   const handleUpdateMealWeight = (mealId, value) => {
     setMeals(prevMeals => prevMeals.map(meal => {
@@ -2290,6 +2363,7 @@ export default function App() {
         profile,
         customFoods,
         customBarcodes,
+        learnedProducts,
         rememberedFoodPortions,
         apiKey: apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey,
         openAiApiKey,
@@ -2350,6 +2424,10 @@ export default function App() {
         if (Array.isArray(importedData.customFoods)) {
           setCustomFoods(importedData.customFoods);
         }
+        if (Array.isArray(importedData.learnedProducts)) {
+          setLearnedProducts(importedData.learnedProducts);
+          refreshLearnedProducts();
+        }
         if (importedData.customBarcodes && typeof importedData.customBarcodes === 'object') {
           setCustomBarcodes(importedData.customBarcodes);
         }
@@ -2387,6 +2465,28 @@ export default function App() {
       }
     };
     reader.readAsText(file);
+  };
+
+  const importSharedProductDatabase = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const products = await importProductsFromFile(file);
+      const completeProducts = products.filter(hasCompleteNutritionValues);
+      if (completeProducts.length === 0) {
+        throw new Error("У файлі немає продуктів з повними КБЖВ.");
+      }
+
+      mergeLearnedProducts(completeProducts);
+      refreshLearnedProducts();
+      showToast(`Імпортовано ${completeProducts.length} продуктів`, "success");
+    } catch (error) {
+      console.error("Shared product database import error:", error);
+      showToast(`Не вдалося імпортувати базу продуктів: ${error.message}`, "error");
+    } finally {
+      event.target.value = "";
+    }
   };
 
   // Розрахунок прогресу для SVG
@@ -2529,6 +2629,17 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {isBarcodeLiveScannerOpen && (
+        <BarcodeScanner
+          onDetected={handleBarcodeDetectedLocally}
+          onError={(message) => {
+            setBarcodeError(message);
+            showToast(message, 'error');
+          }}
+          onClose={() => setIsBarcodeLiveScannerOpen(false)}
+          onFallback={handleBarcodeScannerFallback}
+        />
+      )}
       
       {/* --- App Header --- */}
       <header className="app-header">
@@ -3227,9 +3338,39 @@ export default function App() {
                           ⚠️ {cameraError}
                         </p>
                       )}
+
+                      <button
+                        className="btn-primary"
+                        onClick={() => {
+                          if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
+                            setIsBarcodeLiveScannerOpen(true);
+                          }
+                        }}
+                        style={{
+                          cursor: allowCameraTrigger ? 'pointer' : 'default',
+                          width: '100%',
+                          maxWidth: '260px',
+                          padding: '16px',
+                          borderRadius: '16px',
+                          gap: '10px',
+                          boxShadow: '0 8px 20px rgba(16, 185, 129, 0.3)',
+                          display: 'flex',
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                          pointerEvents: allowCameraTrigger ? 'auto' : 'none',
+                          opacity: allowCameraTrigger ? 1 : 0.6,
+                          border: 'none',
+                          color: 'white',
+                          fontFamily: 'inherit',
+                          fontWeight: 600
+                        }}
+                      >
+                        <QrCode size={20} />
+                        <span>Сканувати без ШІ</span>
+                      </button>
                       
-                      <button 
-                        className="btn-primary" 
+                      <button
+                        className="btn-secondary"
                         onClick={() => {
                           if (allowCameraTrigger && (Date.now() - scannerOpenedTimeRef.current >= 350)) {
                             setCameraRequested(true);
@@ -3239,17 +3380,15 @@ export default function App() {
                           cursor: allowCameraTrigger ? 'pointer' : 'default', 
                           width: '100%', 
                           maxWidth: '260px', 
+                          marginTop: '10px',
                           padding: '16px', 
                           borderRadius: '16px', 
                           gap: '10px', 
-                          boxShadow: '0 8px 20px rgba(16, 185, 129, 0.3)', 
                           display: 'flex', 
                           justifyContent: 'center', 
                           alignItems: 'center',
                           pointerEvents: allowCameraTrigger ? 'auto' : 'none',
                           opacity: allowCameraTrigger ? 1 : 0.6,
-                          border: 'none',
-                          color: 'white',
                           fontFamily: 'inherit',
                           fontWeight: 600
                         }}
@@ -4485,6 +4624,19 @@ export default function App() {
             {/* Bottom Actions for Barcode Mode (Camera active, no result, no loading) */}
             {scannerMode === 'barcode' && cameraActive && !barcodeResult && !isBarcodeScanning && !barcodeLoading && (
               <div className="camera-actions-wrapper">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    stopCamera();
+                    setIsBarcodeLiveScannerOpen(true);
+                  }}
+                  style={{ width: '100%', margin: 0, borderRadius: '14px' }}
+                >
+                  <QrCode size={18} />
+                  Сканувати без ШІ
+                </button>
+
                 {/* Manual entry wrapper inside camera scanner */}
                 <div style={{ width: '100%' }}>
                   <form onSubmit={handleBarcodeSearch} className="barcode-input-wrapper" style={{ margin: 0 }}>
@@ -5277,8 +5429,9 @@ export default function App() {
                         value={geminiModel}
                         onChange={(e) => setGeminiModel(e.target.value)}
                       >
-                        <option value="gemini-2.5-flash">Gemini 2.5 Flash (Швидко)</option>
-                        <option value="gemini-2.5-pro">Gemini 2.5 Pro (Точно)</option>
+                        {GEMINI_MODEL_OPTIONS.map(model => (
+                          <option key={model.value} value={model.value}>{model.label}</option>
+                        ))}
                       </select>
                     </div>
 
@@ -5523,6 +5676,26 @@ export default function App() {
                   <Download size={16} />
                   Шаблон CSV
                 </button>
+
+                <button
+                  type="button"
+                  className="database-action-btn"
+                  onClick={() => exportProductsToFile([...customFoods, ...Object.values(customBarcodes)])}
+                >
+                  <Download size={16} />
+                  Експортувати базу продуктів
+                </button>
+
+                <label className="database-action-btn">
+                  <Upload size={16} />
+                  Імпортувати базу продуктів
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={importSharedProductDatabase}
+                    style={{ display: 'none' }}
+                  />
+                </label>
 
                 <button
                   type="button"
