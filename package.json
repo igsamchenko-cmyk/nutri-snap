@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@zxing/browser": "^0.2.0",
-    "@zxing/library": "^0.23.0",
+    "@zxing/library": "^0.22.0",
     "lucide-react": "^1.16.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
