@@ -36,3 +36,6 @@ matchsense-ai/
 matchsense-dashboard/
 valuebet-bot/
 
+# Звіти та матеріали аудиту
+src/nutri/
+
