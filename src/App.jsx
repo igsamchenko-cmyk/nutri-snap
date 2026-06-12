@@ -32,7 +32,8 @@ import {
   TrendingUp,
   Zap,
   CalendarDays,
-  Copy
+  Copy,
+  Scale
 } from 'lucide-react';
 import {
   SERVER_GEMINI_API_KEY,
@@ -297,6 +298,7 @@ export default function App() {
   // Дані страв та води (ініціалізація з localStorage)
   const [meals, setMeals] = useLocalStorageState('nutrisnap_meals', []);
   const [waterIntake, setWaterIntake] = useLocalStorageState('nutrisnap_water', {});
+  const [weightLog, setWeightLog] = useLocalStorageState('nutrisnap_weight_log', {});
 
   // Показувати трекер води (вимкнено за замовчуванням)
   const [showWaterTracker, setShowWaterTracker] = useLocalStorageState('nutrisnap_show_water', false);
@@ -333,6 +335,12 @@ export default function App() {
       targetWater: 2100
     };
   });
+
+  const [weightInput, setWeightInput] = useState(profile.weight || '');
+
+  useEffect(() => {
+    setWeightInput(profile.weight || '');
+  }, [profile.weight]);
 
   // Налаштування ШІ
   const [apiKey, setApiKey] = useState(() => {
@@ -2352,6 +2360,26 @@ export default function App() {
     setProfile(updated);
   };
 
+  const handleRecordWeight = () => {
+    const weightNum = parseFloat(weightInput);
+    if (isNaN(weightNum) || weightNum <= 0) {
+      showToast("Будь ласка, введіть коректне значення ваги", "error");
+      return;
+    }
+    const today = getTodayString();
+    setWeightLog(prev => ({
+      ...prev,
+      [today]: weightNum
+    }));
+    
+    if (window.confirm("Бажаєте автоматично перерахувати цілі калорійності та макросів на основі нової ваги?")) {
+      handleProfileChange('weight', weightNum);
+    } else {
+      setProfile(prev => ({ ...prev, weight: weightNum }));
+    }
+    showToast(`Вагу ${weightNum} кг успішно записано на сьогодні!`, "success");
+  };
+
   // Експорт та імпорт даних користувача (Бекапи)
   const exportUserData = () => {
     try {
@@ -2360,6 +2388,7 @@ export default function App() {
         exportedAt: new Date().toISOString(),
         meals,
         waterIntake,
+        weight_log: weightLog,
         profile,
         customFoods,
         customBarcodes,
@@ -2417,6 +2446,9 @@ export default function App() {
         }
         if (importedData.waterIntake && typeof importedData.waterIntake === 'object') {
           setWaterIntake(importedData.waterIntake);
+        }
+        if (importedData.weight_log && typeof importedData.weight_log === 'object') {
+          setWeightLog(importedData.weight_log);
         }
         if (importedData.profile && typeof importedData.profile === 'object') {
           setProfile(prev => ({ ...prev, ...importedData.profile }));
@@ -2614,6 +2646,87 @@ export default function App() {
     }
     return days;
   }, [meals, waterIntake, profile.targetCalories]);
+
+  // Дані аналітики ваги за 30 днів
+  const weightAnalytics = useMemo(() => {
+    const days = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = getTodayString(d);
+      const weightVal = weightLog[dateStr] || null;
+      days.push({
+        dateStr,
+        dateObj: d,
+        weight: weightVal ? Number(weightVal) : null,
+        label: d.toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })
+      });
+    }
+    return days;
+  }, [weightLog]);
+
+  // Розрахунок лінії тренду ваги за 30 днів
+  const weightTrend = useMemo(() => {
+    const points = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = getTodayString(d);
+      if (weightLog[dateStr] !== undefined && weightLog[dateStr] !== null) {
+        points.push({
+          x: 29 - i,
+          y: Number(weightLog[dateStr])
+        });
+      }
+    }
+    
+    if (points.length < 2) {
+      return { slope: 0, intercept: 0, hasTrend: false, pointsCount: points.length };
+    }
+    
+    const n = points.length;
+    const sumX = points.reduce((sum, p) => sum + p.x, 0);
+    const sumY = points.reduce((sum, p) => sum + p.y, 0);
+    const sumXY = points.reduce((sum, p) => sum + p.x * p.y, 0);
+    const sumXX = points.reduce((sum, p) => sum + p.x * p.x, 0);
+    
+    const meanX = sumX / n;
+    const meanY = sumY / n;
+    
+    const numerator = points.reduce((sum, p) => sum + (p.x - meanX) * (p.y - meanY), 0);
+    const denominator = points.reduce((sum, p) => sum + (p.x - meanX) * (p.x - meanX), 0);
+    
+    let slope = 0;
+    if (denominator !== 0) {
+      slope = numerator / denominator;
+    }
+    const intercept = meanY - slope * meanX;
+    
+    return {
+      slope,
+      intercept,
+      hasTrend: true,
+      pointsCount: n
+    };
+  }, [weightLog]);
+
+  // Середній калораж за останні 30 днів (з днів, де записана хоча б одна страва)
+  const thirtyDayCaloriesAvg = useMemo(() => {
+    let totalCals = 0;
+    let loggedDaysCount = 0;
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = getTodayString(d);
+      const dayMeals = meals.filter(m => m.date === dateStr);
+      if (dayMeals.length > 0) {
+        const dayCalories = dayMeals.reduce((sum, m) => sum + (Number(m.calories) || 0), 0);
+        totalCals += dayCalories;
+        loggedDaysCount++;
+      }
+    }
+    return loggedDaysCount > 0 ? Math.round(totalCals / loggedDaysCount) : 0;
+  }, [meals]);
 
   // Перемикання дат
   const changeDate = (days) => {
@@ -5261,6 +5374,67 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* Блок «Вага» (Журнал ваги) */}
+            <div className="glass-card" style={{ marginTop: '16px' }}>
+              <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Scale size={18} style={{ color: 'var(--color-accent)' }} />
+                Журнал ваги
+              </h3>
+              
+              <div className="settings-group">
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: '120px' }}>
+                    <span className="settings-label" style={{ display: 'block', marginBottom: '8px' }}>
+                      Поточна вага для запису (кг):
+                    </span>
+                    <input 
+                      type="number"
+                      step="0.1"
+                      className="settings-input"
+                      style={{ width: '100%' }}
+                      value={weightInput}
+                      onChange={(e) => setWeightInput(e.target.value)}
+                      placeholder="напр. 70.5"
+                    />
+                  </div>
+                  <button 
+                    className="btn-primary"
+                    style={{ 
+                      height: '42px', 
+                      padding: '0 20px', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      gap: '8px',
+                      borderRadius: '12px',
+                      fontWeight: 600,
+                      border: 'none',
+                      cursor: 'pointer'
+                    }}
+                    onClick={handleRecordWeight}
+                  >
+                    <Check size={18} />
+                    Записати на сьогодні
+                  </button>
+                </div>
+                
+                {weightLog[getTodayString()] && (
+                  <div style={{ 
+                    marginTop: '12px', 
+                    padding: '8px 12px', 
+                    background: 'rgba(16, 185, 129, 0.1)', 
+                    border: '1px solid rgba(16, 185, 129, 0.2)', 
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    color: '#34d399',
+                    display: 'inline-block'
+                  }}>
+                    Сьогодні вже записано: <strong>{weightLog[getTodayString()]} кг</strong>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -5373,6 +5547,229 @@ export default function App() {
                 <span>🟥 &gt;110% = Перевищення</span>
                 <span>🟦 &lt;90% = Недобір</span>
               </div>
+            </div>
+
+            {/* Блок «Графік ваги» */}
+            <div className="glass-card" style={{ marginTop: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <TrendingUp size={18} style={{ color: 'var(--color-accent)' }} />
+                  Динаміка ваги за останні 30 днів
+                </h3>
+              </div>
+              
+              {(() => {
+                const loggedPoints = weightAnalytics.filter(day => day.weight !== null);
+                const pointsCount = loggedPoints.length;
+                
+                if (pointsCount === 0) {
+                  return (
+                    <div style={{ 
+                      padding: '40px 20px', 
+                      textAlign: 'center', 
+                      color: 'var(--text-dark-muted)', 
+                      fontSize: '13px' 
+                    }}>
+                      Записи ваги відсутні. Додайте вагу на вкладці <strong>Профіль</strong>, щоб почати відстеження.
+                    </div>
+                  );
+                }
+                
+                const weights = loggedPoints.map(p => p.weight);
+                let minW = Math.min(...weights);
+                let maxW = Math.max(...weights);
+                
+                if (minW === maxW) {
+                  minW -= 2;
+                  maxW += 2;
+                } else {
+                  const margin = (maxW - minW) * 0.15 || 1;
+                  minW -= margin;
+                  maxW += margin;
+                }
+                
+                // SVG dimensions: width 500, height 220
+                // Padding: left 45, right 20, top 25, bottom 40
+                const svgW = 500;
+                const svgH = 220;
+                const padL = 45;
+                const padR = 20;
+                const padT = 25;
+                const padB = 40;
+                
+                const chartW = svgW - padL - padR;
+                const chartH = svgH - padT - padB;
+                
+                const getX = (idx) => padL + (idx * chartW / 29);
+                const getY = (w) => svgH - padB - ((w - minW) / (maxW - minW) * chartH);
+                
+                // Generate points string for polyline
+                const polylinePoints = loggedPoints.map(p => {
+                  const dayIdx = weightAnalytics.findIndex(day => day.dateStr === p.dateStr);
+                  return `${getX(dayIdx)},${getY(p.weight)}`;
+                }).join(' ');
+                
+                // Linear regression line coords
+                let trendLineElement = null;
+                if (weightTrend.hasTrend) {
+                  const x1 = 0;
+                  const y1 = weightTrend.slope * x1 + weightTrend.intercept;
+                  const x2 = 29;
+                  const y2 = weightTrend.slope * x2 + weightTrend.intercept;
+                  
+                  trendLineElement = (
+                    <line 
+                      x1={getX(x1)} 
+                      y1={getY(y1)} 
+                      x2={getX(x2)} 
+                      y2={getY(y2)} 
+                      stroke="#f59e0b" 
+                      strokeWidth="2" 
+                      strokeDasharray="4,4" 
+                      opacity="0.8" 
+                    />
+                  );
+                }
+                
+                // Grid lines (3 horizontal lines)
+                const gridVals = [
+                  maxW,
+                  (minW + maxW) / 2,
+                  minW
+                ];
+                
+                return (
+                  <div>
+                    <div style={{ width: '100%', overflowX: 'auto' }}>
+                      <svg 
+                        viewBox={`0 0 ${svgW} ${svgH}`} 
+                        style={{ 
+                          width: '100%', 
+                          minWidth: '400px', 
+                          height: 'auto', 
+                          display: 'block' 
+                        }}
+                      >
+                        {/* Grid lines & values */}
+                        {gridVals.map((val, idx) => {
+                          const y = getY(val);
+                          return (
+                            <g key={idx}>
+                              <line 
+                                x1={padL} 
+                                y1={y} 
+                                x2={svgW - padR} 
+                                y2={y} 
+                                stroke="rgba(255, 255, 255, 0.08)" 
+                                strokeDasharray="3,3" 
+                              />
+                              <text 
+                                x={padL - 8} 
+                                y={y + 4} 
+                                textAnchor="end" 
+                                fill="rgba(255, 255, 255, 0.4)" 
+                                fontSize="9"
+                              >
+                                {val.toFixed(1)} кг
+                              </text>
+                            </g>
+                          );
+                        })}
+                        
+                        {/* Trend line */}
+                        {trendLineElement}
+                        
+                        {/* Weight Polyline */}
+                        {polylinePoints && (
+                          <polyline 
+                            points={polylinePoints} 
+                            fill="none" 
+                            stroke="var(--color-accent)" 
+                            strokeWidth="3" 
+                            strokeLinecap="round" 
+                            strokeLinejoin="round" 
+                          />
+                        )}
+                        
+                        {/* Weight Data Points (dots and values) */}
+                        {loggedPoints.map((p, idx) => {
+                          const dayIdx = weightAnalytics.findIndex(day => day.dateStr === p.dateStr);
+                          const cx = getX(dayIdx);
+                          const cy = getY(p.weight);
+                          return (
+                            <g key={idx}>
+                              <circle 
+                                cx={cx} 
+                                cy={cy} 
+                                r="5" 
+                                fill="var(--color-accent)" 
+                                stroke="rgba(255,255,255,0.9)" 
+                                strokeWidth="1.5" 
+                              />
+                              <text 
+                                x={cx} 
+                                y={cy - 10} 
+                                textAnchor="middle" 
+                                fill="#fff" 
+                                fontSize="9" 
+                                fontWeight="600"
+                                style={{
+                                  textShadow: '0 1px 3px rgba(0,0,0,0.8)'
+                                }}
+                              >
+                                {p.weight}
+                              </text>
+                            </g>
+                          );
+                        })}
+                        
+                        {/* Day labels at the bottom */}
+                        {weightAnalytics.map((day, idx) => {
+                          if (idx % 6 !== 0 && idx !== 29) return null;
+                          const cx = getX(idx);
+                          return (
+                            <text 
+                              key={idx} 
+                              x={cx} 
+                              y={svgH - 15} 
+                              textAnchor="middle" 
+                              fill="rgba(255, 255, 255, 0.4)" 
+                              fontSize="9"
+                            >
+                              {day.label}
+                            </text>
+                          );
+                        })}
+                      </svg>
+                    </div>
+                    
+                    {/* Weight Insight */}
+                    <div style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '10px', 
+                      marginTop: '14px', 
+                      padding: '10px 14px', 
+                      background: 'rgba(255,255,255,0.03)', 
+                      borderRadius: '12px', 
+                      border: '1px solid rgba(255,255,255,0.06)' 
+                    }}>
+                      <span style={{ fontSize: '16px' }}>📉</span>
+                      <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-dark)' }}>
+                        {weightTrend.hasTrend ? (
+                          <>
+                            Тижневий тренд: <strong style={{ color: weightTrend.slope * 7 <= 0 ? '#10b981' : '#f59e0b' }}>
+                              {weightTrend.slope * 7 > 0 ? '+' : ''}{(weightTrend.slope * 7).toFixed(1)} кг/тиж
+                            </strong> при <strong style={{ color: 'var(--color-calories)' }}>~{thirtyDayCaloriesAvg} ккал/день</strong> за останні 30 днів.
+                          </>
+                        ) : (
+                          "Потрібно щонайменше 2 записи ваги за 30 днів для розрахунку тренду."
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
