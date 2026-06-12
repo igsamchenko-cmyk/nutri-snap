@@ -1088,7 +1088,7 @@ body.light-mode .nav-item:hover {
   border-top-right-radius: 32px;
   border-top: 1px solid var(--border-dark);
   padding: 24px 24px calc(24px + env(safe-area-inset-bottom, 0px));
-  z-index: 70;
+  z-index: 105;
   color: white;
   animation: slide-up-sheet 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   max-height: 85%;
@@ -1935,10 +1935,18 @@ body.light-mode .weight-input {
 
 .quick-portion-row {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
-  margin: 8px 0 14px;
+  margin: 8px -24px 14px;
+  padding: 0 24px 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
+
+.quick-portion-row::-webkit-scrollbar {
+  display: none;
+}
+
 
 .quick-portion-chip {
   min-height: 34px;
@@ -3993,4 +4001,26 @@ body.light-mode .analytics-bar-col.today .analytics-bar-day { color: #059669; }
     max-width: none;        /* прибрати обмеження min(250px, 52vw) */
     justify-content: flex-start;
   }
+
+  /* ── Компактні стилі для scan-result-card ── */
+  .scan-result-card {
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+    max-height: 92%;
+  }
+  .results-header {
+    margin-bottom: 12px;
+  }
+  .results-macros-grid {
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .results-macro-box {
+    padding: 10px 8px;
+    border-radius: 12px;
+  }
+  .quick-portion-row {
+    margin: 6px -16px 10px;
+    padding: 0 16px 4px;
+  }
 }
+
