@@ -83,6 +83,60 @@ const SMART_SEARCH_SCHEMA = {
   }
 };
 
+function getGenerationConfig(baseConfig, modelName) {
+  if (modelName && modelName.includes('pro')) {
+    return baseConfig;
+  }
+  return {
+    ...baseConfig,
+    thinkingConfig: { thinkingBudget: 0 }
+  };
+}
+
+async function requestGeminiContent(modelName, payload, apiKey) {
+  const useServerKey = apiKey === SERVER_GEMINI_API_KEY;
+  const url = useServerKey
+    ? `/api/gemini/${encodeURIComponent(modelName)}`
+    : `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+
+  const headers = {
+    "Content-Type": "application/json"
+  };
+
+  if (!useServerKey) {
+    headers["x-goog-api-key"] = apiKey.trim();
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw handleGeminiError(response, errorData);
+  }
+
+  return response.json();
+}
+
+function handleGeminiError(response, errorData) {
+  const apiErrorMessage = errorData.error?.message || "";
+  console.error("Gemini API Error details:", errorData);
+  
+  if (response.status === 429 || apiErrorMessage.toLowerCase().includes("quota") || apiErrorMessage.toLowerCase().includes("exhausted") || apiErrorMessage.toLowerCase().includes("rate limit")) {
+    return new Error("Перевищено ліміти або квоту запитів ШІ (Помилка 429 / Resource Exhausted). На безкоштовному тарифі діє ліміт (зазвичай 15 запитів на хвилину або добові ліміти). Будь ласка, зачекайте 1-2 хвилини і спробуйте знову.");
+  } else if (response.status === 403 || apiErrorMessage.toLowerCase().includes("api key")) {
+    return new Error("Невірний API-ключ або обмежений доступ. Будь ласка, перевірте правильність вашого Gemini API-ключа в налаштуваннях.");
+  } else if (response.status === 400) {
+    return new Error(apiErrorMessage || "Невірний запит до API. Перевірте формат або модель.");
+  } else {
+    return new Error(apiErrorMessage || `Помилка API Gemini (Код: ${response.status})`);
+  }
+}
+
+>>>>>>> 2901ff8 (fix: narrow-screen meal card layout; perf: disable Gemini thinking, smaller scan image)
 export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2.5-flash') {
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
@@ -142,12 +196,12 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
         ]
       }
     ],
-    generationConfig: {
+    generationConfig: getGenerationConfig({
       responseMimeType: "application/json",
       responseSchema: FOOD_SCAN_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 2048
-    }
+    }, modelName)
   };
 
   try {
@@ -210,12 +264,12 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
         ]
       }
     ],
-    generationConfig: {
+    generationConfig: getGenerationConfig({
       responseMimeType: "application/json",
       responseSchema: BARCODE_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
-    }
+    }, modelName)
   };
 
   try {
@@ -264,12 +318,12 @@ export async function estimateFoodNutritionByName(foodName, apiKey, modelName = 
         ]
       }
     ],
-    generationConfig: {
+    generationConfig: getGenerationConfig({
       responseMimeType: "application/json",
       responseSchema: NAME_ESTIMATE_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
-    }
+    }, modelName)
   };
 
   try {
@@ -334,12 +388,12 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
         ]
       }
     ],
-    generationConfig: {
+    generationConfig: getGenerationConfig({
       responseMimeType: "application/json",
       responseSchema: PACKAGING_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
-    }
+    }, modelName)
   };
 
   try {
@@ -412,12 +466,12 @@ export async function searchSmartProducts(query, apiKey, modelName = 'gemini-2.5
         ]
       }
     ],
-    generationConfig: {
+    generationConfig: getGenerationConfig({
       responseMimeType: "application/json",
       responseSchema: SMART_SEARCH_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
-    }
+    }, modelName)
   };
 
   try {

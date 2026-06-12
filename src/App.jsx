@@ -74,7 +74,7 @@ import {
 import useLocalStorageState from './hooks/useLocalStorageState';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
-const DEFAULT_OPENAI_MODEL = 'gpt-4o';
+const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' : '';
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
@@ -1101,7 +1101,7 @@ export default function App() {
     const video = videoRef.current;
     const sourceWidth = video.videoWidth || 640;
     const sourceHeight = video.videoHeight || 480;
-    const maxSide = 1280;
+    const maxSide = 1024;
     const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(sourceWidth * scale);
@@ -1110,7 +1110,7 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const base64Data = canvas.toDataURL('image/jpeg', 0.82);
+    const base64Data = canvas.toDataURL('image/jpeg', 0.75);
     triggerScan(base64Data);
   };
 
@@ -1125,8 +1125,8 @@ export default function App() {
           let width = img.width;
           let height = img.height;
           
-          // Обмежуємо максимальний розмір до 1280px (баланс деталь/розмір)
-          const max_size = 1280;
+          // Обмежуємо максимальний розмір до 1024px (баланс деталь/розмір)
+          const max_size = 1024;
           if (width > height) {
             if (width > max_size) {
               height *= max_size / width;
@@ -1144,8 +1144,8 @@ export default function App() {
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
           
-          // Якість 82% — достатньо чітко для читання етикеток
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          // Якість 75% — достатньо чітко для сканування страви
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
           resolve(dataUrl);
         };
         img.onerror = (err) => reject(err);

@@ -3961,3 +3961,36 @@ body.light-mode .analytics-bar-col.today .analytics-bar-day { color: #059669; }
   .analytics-stat-val { font-size: 17px; }
   .analytics-bar-val  { font-size: 8px; }
 }
+
+/* ── Вузькі екрани (Fold cover screen, компактні смартфони) ───────────── */
+@media (max-width: 480px) {
+  .timeline-item {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .meal-info {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .meal-name {
+    overflow-wrap: anywhere;
+  }
+
+  /* ккал + макроси: другий рядок на всю ширину */
+  .meal-calories-details {
+    order: 5;
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .meal-macros {
+    max-width: none;        /* прибрати обмеження min(250px, 52vw) */
+    justify-content: flex-start;
+  }
+}
