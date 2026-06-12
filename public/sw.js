@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nutrisnap-cache-v73';
+const CACHE_NAME = 'nutrisnap-cache-v74';
 const BASE_PATH = '/nutri-snap';
 const ASSETS_TO_CACHE = [
   `${BASE_PATH}/`,
