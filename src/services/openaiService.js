@@ -1,4 +1,5 @@
-import { downscaleImageToBase64 } from '../utils/imageUtils.js';
+﻿import { downscaleImageToBase64 } from '../utils/imageUtils.js';
+import { filterValidAiNutritionResults, getValidatedAiNutritionResult } from './aiNutritionValidation.js';
 
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 export const SERVER_OPENAI_API_KEY = '__nutrisnap_server_openai_key__';
@@ -137,22 +138,6 @@ function buildResponseBody(modelName, input, schemaName, schema, maxOutputTokens
   return requestBody;
 }
 
-function normalizeFoodResult(result) {
-  return {
-    ...result,
-    calories: result.calories === null ? null : Number(result.calories),
-    protein: result.protein === null ? null : Number(result.protein),
-    fat: result.fat === null ? null : Number(result.fat),
-    carbs: result.carbs === null ? null : Number(result.carbs),
-    weight: Number(result.weight) || 100,
-    confidence: Number(result.confidence) || 0,
-    ingredients: result.ingredients || '',
-    dataQuality: result.dataQuality || 'estimate',
-    needsManualNutrition: Boolean(result.needsManualNutrition),
-    warning: result.warning || 'КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням.'
-  };
-}
-
 function handleOpenAIError(response, errorData) {
   const apiErrorMessage = errorData.error?.message || '';
   console.error('OpenAI API Error details:', errorData);
@@ -252,7 +237,18 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
     proxyUrl
   );
 
-  return normalizeFoodResult(result);
+  return getValidatedAiNutritionResult({
+    ...result,
+    ingredients: result.ingredients || '',
+    dataQuality: result.dataQuality || 'estimate',
+    needsManualNutrition: Boolean(result.needsManualNutrition),
+    warning: result.warning || 'КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням.'
+  }, {
+    requireConfidence: true,
+    requireNeedsManualNutrition: true,
+    confidenceMax: 100,
+    defaultDataQuality: 'estimate'
+  });
 }
 
 export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-4o', proxyUrl = '') {
@@ -308,5 +304,8 @@ export async function searchSmartProductsWithOpenAI(query, apiKey, modelName = '
     proxyUrl
   );
 
-  return Array.isArray(result.products) ? result.products : [];
+  return filterValidAiNutritionResults(result.products, {
+    calorieTolerance: 50,
+    defaultEstimateWarning: 'Підказка ШІ може бути приблизною. Введіть КБЖВ з етикетки або перевіреного джерела перед збереженням.'
+  });
 }

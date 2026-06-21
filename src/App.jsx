@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -51,10 +51,58 @@ import { mockFoods } from './data/mockFood';
 import { productCatalog } from './data/products';
 import { GEMINI_MODEL_OPTIONS } from './constants';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
-import BarcodeScanner from './components/BarcodeScanner';
 import { safeSetItem, safeRemoveItem } from './utils/storage';
 import { getLearnedProducts, mergeLearnedProducts, saveLearnedProduct, setLearnedProducts } from './utils/learnedProducts';
 import { exportProductsToFile, importProductsFromFile } from './utils/productShare';
+import {
+  createBackupFilename,
+  createBackupPayload,
+  parseBackupFileContent,
+  prepareRestoreData
+} from './services/backup';
+import {
+  calculateCaloriesFromMacros,
+  roundNutritionValues,
+  scaleNutritionPer100g
+} from './services/nutrition';
+import {
+  createAiConfirmationDraft,
+  scaleAiConfirmationDraftByWeight,
+  validateAiConfirmationDraft
+} from './services/aiConfirmation';
+import {
+  cloneMealEntryForDate,
+  copyMealEntriesForDate,
+  createCustomFoodItem,
+  createFavoriteFromMealEntry,
+  createFoodItem,
+  createBarcodeMealEntry,
+  createManualMealEntry,
+  createMealEntryFromCustomFood,
+  createMealEntryFromFavorite,
+  createMealEntryFromFoodItem,
+  normalizeCustomFoods,
+  normalizeFavoriteFoods,
+  normalizeMealEntries
+} from './models/food';
+import {
+  getCalendarMealIndicators,
+  getCategoryTotals,
+  getDailyTotals,
+  getMacroProgress,
+  getMealsByCategory,
+  getMealsByDate,
+  getRecentDatesForCategory as selectRecentDatesForCategory,
+  getStreakStats,
+  getThirtyDayAverage,
+  getUsageStats,
+  getWeeklyAverages,
+  getWeeklyTotals
+} from './selectors/meals';
+import {
+  getWeightForDate,
+  getWeightTrendData
+} from './selectors/weight';
 import {
   PRODUCT_IMPORT_FIELDS,
   parseCsvText,
@@ -80,6 +128,7 @@ const DEFAULT_OPENAI_PROXY_URL = import.meta.env.DEV ? '/api/openai/responses' :
 const MAX_LOCAL_SEARCH_RESULTS = 80;
 const MAX_SEARCH_SUGGESTIONS = 6;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const BarcodeScanner = React.lazy(() => import('./components/BarcodeScanner'));
 
 const normalizeSearchText = (value = '') =>
   String(value)
@@ -299,6 +348,7 @@ export default function App() {
   const [meals, setMeals] = useLocalStorageState('nutrisnap_meals', []);
   const [waterIntake, setWaterIntake] = useLocalStorageState('nutrisnap_water', {});
   const [weightLog, setWeightLog] = useLocalStorageState('nutrisnap_weight_log', {});
+  const normalizedMeals = useMemo(() => normalizeMealEntries(meals), [meals]);
 
   // Показувати трекер води (вимкнено за замовчуванням)
   const [showWaterTracker, setShowWaterTracker] = useLocalStorageState('nutrisnap_show_water', false);
@@ -356,10 +406,12 @@ export default function App() {
   const [scanMode, setScanMode] = useLocalStorageState('nutrisnap_scanmode', DEFAULT_API_KEY ? 'gemini' : 'mock', { raw: true });
   const [geminiModel, setGeminiModel] = useLocalStorageState('nutrisnap_geminimodel', 'gemini-2.5-flash', { raw: true });
   const [openAiModel, setOpenAiModel] = useLocalStorageState('nutrisnap_openai_model', DEFAULT_OPENAI_MODEL, { raw: true });
+  const [aiPhotoNoticeAccepted, setAiPhotoNoticeAccepted] = useLocalStorageState('nutrisnap_ai_photo_notice_ack', false);
   const [updateRegistration, setUpdateRegistration] = useState(null);
 
   // --- Favorite Meals & Toast Notification States ---
   const [favorites, setFavorites] = useLocalStorageState('nutrisnap_favorites', []);
+  const normalizedFavorites = useMemo(() => normalizeFavoriteFoods(favorites), [favorites]);
 
   const [toast, setToast] = useState(null);
 
@@ -374,6 +426,32 @@ export default function App() {
     setToast({ message, type, ...options });
   };
 
+  const acknowledgeAiPhotoNotice = () => {
+    setAiPhotoNoticeAccepted(true);
+    showToast("Попередження збережено. Ви можете користуватися фото-аналізом.", "info");
+  };
+
+  const ensureAiPhotoNoticeAccepted = () => {
+    if (aiPhotoNoticeAccepted) return true;
+    showToast("Перед фото-аналізом підтвердьте коротке попередження про AI-оцінку.", "warning", { duration: 5000 });
+    return false;
+  };
+
+  const renderAiPhotoNotice = (compact = false) => (
+    <div className={`ai-photo-notice ${compact ? 'compact' : ''}`} role="note">
+      <div className="ai-photo-notice-title">
+        <AlertCircle size={16} />
+        <strong>Перед AI-аналізом фото</strong>
+      </div>
+      <p>
+        Фото їжі може надсилатися до обраного AI-провайдера. КБЖВ є приблизною оцінкою; NutriSnap не надає медичних порад. Перевірте і скоригуйте результат вручну перед збереженням.
+      </p>
+      <button type="button" onClick={acknowledgeAiPhotoNotice}>
+        Зрозуміло
+      </button>
+    </div>
+  );
+
   const refreshLearnedProducts = () => {
     setLearnedProductsState(getLearnedProducts());
   };
@@ -384,29 +462,41 @@ export default function App() {
   };
 
   const isFavorite = (name) => {
-    if (!name) return false;
-    return favorites.some(f => f.name.toLowerCase() === name.toLowerCase());
+    const normalizedName = normalizeSearchText(name);
+    if (!normalizedName) return false;
+    return normalizedFavorites.some(f => normalizeSearchText(f.name) === normalizedName);
   };
 
   const toggleFavoriteScanned = () => {
     if (!scanResult) return;
     const name = scanResult.name;
     setFavorites(prev => {
-      const exists = prev.some(f => f.name.toLowerCase() === name.toLowerCase());
+      const exists = prev.some(f => normalizeSearchText(f.name) === normalizeSearchText(name));
       if (exists) {
         showToast(`"${name}" видалено з обраного`, 'info');
-        return prev.filter(f => f.name.toLowerCase() !== name.toLowerCase());
+        return prev.filter(f => normalizeSearchText(f.name) !== normalizeSearchText(name));
       } else {
         showToast(`"${name}" додано до обраного`, 'success');
-        return [...prev, {
-          name: name,
+        const favoriteWeight = Number(editedWeight) || 100;
+        const favoriteTotals = {
           calories: Number(scannedCalories) || 0,
           protein: Number(scannedProtein) || 0,
           fat: Number(scannedFat) || 0,
-          carbs: Number(scannedCarbs) || 0,
-          weight: Number(editedWeight) || 100,
+          carbs: Number(scannedCarbs) || 0
+        };
+        return [...prev, createFavoriteFromMealEntry({
+          ...scanResult,
+          name,
+          ...favoriteTotals,
+          totals: favoriteTotals,
+          weight: favoriteWeight,
+          servingGrams: favoriteWeight,
+          source: scanResult.source || (scanResult.dataQuality === 'database_match' ? 'local_db' : 'ai_photo'),
+          dataQuality: scanResult.dataQuality,
+          confidence: scanResult.confidence,
+          warning: scanResult.warning,
           image: scanResult?.image || ''
-        }];
+        })];
       }
     });
   };
@@ -415,21 +505,32 @@ export default function App() {
     if (!barcodeResult) return;
     const name = barcodeResult.name;
     setFavorites(prev => {
-      const exists = prev.some(f => f.name.toLowerCase() === name.toLowerCase());
+      const exists = prev.some(f => normalizeSearchText(f.name) === normalizeSearchText(name));
       if (exists) {
         showToast(`"${name}" видалено з обраного`, 'info');
-        return prev.filter(f => f.name.toLowerCase() !== name.toLowerCase());
+        return prev.filter(f => normalizeSearchText(f.name) !== normalizeSearchText(name));
       } else {
         showToast(`"${name}" додано до обраного`, 'success');
-        return [...prev, {
-          name: name,
+        const favoriteWeight = Number(barcodeEditedWeight) || 100;
+        const favoriteTotals = {
           calories: Number(barcodeScannedCalories) || 0,
           protein: Number(barcodeScannedProtein) || 0,
           fat: Number(barcodeScannedFat) || 0,
-          carbs: Number(barcodeScannedCarbs) || 0,
-          weight: Number(barcodeEditedWeight) || 100,
-          image: ''
-        }];
+          carbs: Number(barcodeScannedCarbs) || 0
+        };
+        const favoriteSource = (barcodeResult.isCustom || barcodeResult.isCustomBarcode) ? 'custom' : 'barcode_off';
+        return [...prev, createFavoriteFromMealEntry({
+          ...barcodeResult,
+          name,
+          ...favoriteTotals,
+          totals: favoriteTotals,
+          weight: favoriteWeight,
+          servingGrams: favoriteWeight,
+          source: favoriteSource,
+          dataQuality: barcodeResult.dataQuality || (favoriteSource === 'custom' ? 'manual' : 'database'),
+          warning: barcodeResult.warning,
+          image: barcodeResult.image || ''
+        })];
       }
     });
   };
@@ -438,64 +539,21 @@ export default function App() {
     if (!meal) return;
     const name = meal.name;
     setFavorites(prev => {
-      const exists = prev.some(f => f.name.toLowerCase() === name.toLowerCase());
+      const exists = prev.some(f => normalizeSearchText(f.name) === normalizeSearchText(name));
       if (exists) {
         showToast(`"${name}" видалено з обраного`, 'info');
-        return prev.filter(f => f.name.toLowerCase() !== name.toLowerCase());
+        return prev.filter(f => normalizeSearchText(f.name) !== normalizeSearchText(name));
       } else {
         showToast(`"${name}" додано до обраного`, 'success');
-        return [...prev, {
-          name: name,
-          calories: Number(meal.calories) || 0,
-          protein: Number(meal.protein) || 0,
-          fat: Number(meal.fat) || 0,
-          carbs: Number(meal.carbs) || 0,
-          weight: Number(meal.weight) || 100,
+        return [...prev, createFavoriteFromMealEntry(meal, {
           image: meal.image || ''
-        }];
+        })];
       }
     });
   };
 
-  const calculateStreak = () => {
-    const activeDates = new Set();
-    meals.forEach(m => {
-      if (m.date) activeDates.add(m.date);
-    });
-    Object.keys(waterIntake).forEach(dateStr => {
-      if (waterIntake[dateStr] > 0) activeDates.add(dateStr);
-    });
-
-    let streak = 0;
-    let checkDate = new Date();
-    const getLocalDateStr = (d) => {
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      return `${yyyy}-${mm}-${dd}`;
-    };
-
-    let todayStr = getLocalDateStr(checkDate);
-    checkDate.setDate(checkDate.getDate() - 1);
-    let yesterdayStr = getLocalDateStr(checkDate);
-
-    if (activeDates.has(todayStr)) {
-      let tempDate = new Date();
-      while (activeDates.has(getLocalDateStr(tempDate))) {
-        streak++;
-        tempDate.setDate(tempDate.getDate() - 1);
-      }
-    } else if (activeDates.has(yesterdayStr)) {
-      let tempDate = new Date();
-      tempDate.setDate(tempDate.getDate() - 1);
-      while (activeDates.has(getLocalDateStr(tempDate))) {
-        streak++;
-        tempDate.setDate(tempDate.getDate() - 1);
-      }
-    }
-
-    return streak;
-  };
+  const streakStats = useMemo(() => getStreakStats(normalizedMeals, getTodayString(), { waterIntake }), [normalizedMeals, waterIntake]);
+  const calculateStreak = () => streakStats.currentStreak;
 
   const [theme, setTheme] = useState(() => {
     try {
@@ -539,6 +597,7 @@ export default function App() {
   // --- States for Custom Barcodes & Custom Foods ---
   const [customBarcodes, setCustomBarcodes] = useLocalStorageState('nutrisnap_custom_barcodes', {});
   const [customFoods, setCustomFoods] = useLocalStorageState('nutrisnap_custom_foods', []);
+  const normalizedCustomFoods = useMemo(() => normalizeCustomFoods(customFoods), [customFoods]);
   const [rememberedFoodPortions, setRememberedFoodPortions] = useLocalStorageState('nutrisnap_food_portions', {});
   const [learnedProducts, setLearnedProductsState] = useState(() => getLearnedProducts());
 
@@ -550,6 +609,7 @@ export default function App() {
   const [customFoodCarbs, setCustomFoodCarbs] = useState('');
   const [customFoodWeight, setCustomFoodWeight] = useState('100');
   const [customFoodEditTarget, setCustomFoodEditTarget] = useState(null);
+  const [customFoodNotice, setCustomFoodNotice] = useState('');
 
   // Fallback states for when a scanned barcode is not found
   const [barcodeNotFound, setBarcodeNotFound] = useState(null); // stores the scanned barcode string
@@ -567,6 +627,10 @@ export default function App() {
   const [barcodeMealCategory, setBarcodeMealCategory] = useState('Сніданок');
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [isCalendarExpanded, setIsCalendarExpanded] = useState(true);
+  const calendarMealIndicators = useMemo(
+    () => getCalendarMealIndicators(normalizedMeals, calendarDate),
+    [normalizedMeals, calendarDate]
+  );
 
   const getDefaultCategory = () => {
     const currentHour = new Date().getHours();
@@ -993,11 +1057,13 @@ export default function App() {
     setCustomFoodCarbs('');
     setCustomFoodWeight('100');
     setCustomFoodEditTarget(null);
+    setCustomFoodNotice('');
   };
 
   const closeCustomFoodModal = () => {
     setIsCustomFoodModalOpen(false);
     setCustomFoodEditTarget(null);
+    setCustomFoodNotice('');
   };
 
   const openCustomFoodForm = (prefill = {}, editTarget = null) => {
@@ -1008,6 +1074,7 @@ export default function App() {
     setCustomFoodCarbs(prefill.carbs !== undefined ? String(prefill.carbs) : '');
     setCustomFoodWeight(prefill.weight !== undefined ? String(prefill.weight) : '100');
     setCustomFoodEditTarget(editTarget);
+    setCustomFoodNotice(prefill.notice || '');
     setIsCustomFoodModalOpen(true);
   };
 
@@ -1030,6 +1097,7 @@ export default function App() {
   };
 
   const triggerScan = async (imageDataBase64) => {
+    if (!ensureAiPhotoNoticeAccepted()) return;
     setIsScanning(true);
     setScanResult(null);
     setScannedMealCategory(preselectedCategory || getDefaultCategory());
@@ -1041,7 +1109,7 @@ export default function App() {
       const result = await analyzeFoodWithCurrentProvider(imageDataBase64);
       const localNutritionMatch = findBestFoodMatchByName(result.name, [
         ...Object.values(customBarcodes).map(food => ({ ...food, isCustomBarcode: true })),
-        ...customFoods.map(food => ({ ...food, isCustom: true })),
+        ...normalizedCustomFoods.map(food => ({ ...food, isCustom: true })),
         ...learnedProducts.map(food => ({ ...food, isLearned: true })),
         ...productCatalog,
         ...mockFoods
@@ -1082,12 +1150,13 @@ export default function App() {
         warning: scanData.warning || "КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням."
       };
 
-      setScanResult(verifiedResult);
-      setEditedWeight(Number(verifiedResult.weight) || 200);
-      setScannedProtein(Number(verifiedResult.protein) || 0);
-      setScannedFat(Number(verifiedResult.fat) || 0);
-      setScannedCarbs(Number(verifiedResult.carbs) || 0);
-      setScannedCalories(Number(verifiedResult.calories) || 0);
+      const confirmationDraft = createAiConfirmationDraft(verifiedResult);
+      setScanResult(confirmationDraft);
+      setEditedWeight(confirmationDraft.weight || 200);
+      setScannedProtein(confirmationDraft.protein ?? 0);
+      setScannedFat(confirmationDraft.fat ?? 0);
+      setScannedCarbs(confirmationDraft.carbs ?? 0);
+      setScannedCalories(confirmationDraft.calories ?? 0);
     } catch (err) {
       console.error(err);
       openCustomFoodForm({ weight: 100 });
@@ -1104,6 +1173,7 @@ export default function App() {
       console.log("Ignored capturePhoto: triggered too soon after opening scanner.");
       return;
     }
+    if (!ensureAiPhotoNoticeAccepted()) return;
     if (!videoRef.current) return;
     
     const video = videoRef.current;
@@ -1170,6 +1240,10 @@ export default function App() {
       e.target.value = "";
       return;
     }
+    if (!ensureAiPhotoNoticeAccepted()) {
+      e.target.value = "";
+      return;
+    }
     const file = e.target.files[0];
     if (!file) return;
 
@@ -1221,7 +1295,7 @@ export default function App() {
     const fVal = f === '' ? 0 : (parseFloat(f) || 0);
     const cVal = c === '' ? 0 : (parseFloat(c) || 0);
     
-    setScannedCalories(Math.round(pVal * 4 + fVal * 9 + cVal * 4));
+    setScannedCalories(Math.round(calculateCaloriesFromMacros(pVal, fVal, cVal) ?? 0));
   };
 
   // Обробник ручної зміни ваги страви з масштабуванням КБЖВ
@@ -1229,58 +1303,77 @@ export default function App() {
     setEditedWeight(value);
     if (!scanResult) return;
     
-    const baselineWeight = Number(scanResult.weight) || 200;
-    const currentWeightVal = Number(value) || 0;
-    const scale = currentWeightVal > 0 ? (currentWeightVal / baselineWeight) : 0;
+    const scaledNutrition = scaleAiConfirmationDraftByWeight(scanResult, value);
+    if (!scaledNutrition) return;
     
-    const p = Math.round(Number(scanResult.protein || 0) * scale * 10) / 10;
-    const f = Math.round(Number(scanResult.fat || 0) * scale * 10) / 10;
-    const c = Math.round(Number(scanResult.carbs || 0) * scale * 10) / 10;
-    
-    setScannedProtein(p);
-    setScannedFat(f);
-    setScannedCarbs(c);
-    setScannedCalories(Math.round(p * 4 + f * 9 + c * 4));
+    setScannedProtein(scaledNutrition.protein);
+    setScannedFat(scaledNutrition.fat);
+    setScannedCarbs(scaledNutrition.carbs);
+    setScannedCalories(scaledNutrition.calories);
   };
 
   // Додавання розпізнаної страви у щоденник
   const addScannedMealToDiary = () => {
     if (!scanResult) return;
 
-    if (scanResult.dataQuality !== "label_read" && scanResult.dataQuality !== "database_match") {
-      const confirmed = window.confirm("Це приблизна оцінка ШІ, а не точні дані з етикетки. Додати її до щоденника?");
-      if (!confirmed) return;
+    const confirmationDraft = createAiConfirmationDraft(scanResult, {
+      calories: scannedCalories,
+      protein: scannedProtein,
+      fat: scannedFat,
+      carbs: scannedCarbs,
+      weight: editedWeight,
+      needsManualNutrition: false
+    });
+    const confirmationValidation = validateAiConfirmationDraft(confirmationDraft);
+
+    if (!confirmationValidation.isValid) {
+      showToast("Перевірте вагу та КБЖВ: значення мають бути невід'ємними числами, а калорії мають узгоджуватися з макросами.", "error", { duration: 7000 });
+      return;
     }
 
+    const confirmedResult = confirmationValidation.result;
     const category = scannedMealCategory;
 
     const baselineWeight = Number(scanResult.weight) || 200;
-    const finalWeight = Number(editedWeight) || baselineWeight;
+    const finalWeight = Number(confirmedResult.weight);
 
-    const finalCalories = Number(scannedCalories) || 0;
-    const finalProtein = Number(scannedProtein) || 0;
-    const finalFat = Number(scannedFat) || 0;
-    const finalCarbs = Number(scannedCarbs) || 0;
+    const finalCalories = Number(confirmedResult.calories);
+    const finalProtein = Number(confirmedResult.protein);
+    const finalFat = Number(confirmedResult.fat);
+    const finalCarbs = Number(confirmedResult.carbs);
 
-    const newMeal = {
-      id: createMealId(),
-      name: scanResult.name,
-      calories: finalCalories,
-      protein: finalProtein,
-      fat: finalFat,
-      carbs: finalCarbs,
+    const confirmedSource = scanResult.dataQuality === 'database_match' ? 'local_db' : 'ai_photo';
+    const confirmedFoodItem = createFoodItem({
+      ...confirmedResult,
+      id: scanResult.id,
+      brand: scanResult.brand,
+      barcode: scanResult.barcode,
+      source: confirmedSource,
+      dataQuality: confirmedResult.dataQuality || scanResult.dataQuality || 'estimate',
+      confidence: scanResult.confidence,
+      warning: scanResult.warning,
       weight: finalWeight,
-      originalCalories: Number(scanResult.calories),
-      originalProtein: Number(scanResult.protein),
-      originalFat: Number(scanResult.fat),
-      originalCarbs: Number(scanResult.carbs),
-      originalWeight: baselineWeight,
-      category,
+      defaultPortionGrams: finalWeight
+    });
+    const newMeal = createMealEntryFromFoodItem(confirmedFoodItem, finalWeight, {
+      id: createMealId(),
       date: selectedDate,
-      icon: getEmojiForCategory(category)
-    };
+      category,
+      mealType: category,
+      icon: getEmojiForCategory(category),
+      source: confirmedSource,
+      confidence: confirmedFoodItem.confidence,
+      warning: confirmedFoodItem.warning,
+      original: {
+        calories: Number(scanResult.calories),
+        protein: Number(scanResult.protein),
+        fat: Number(scanResult.fat),
+        carbs: Number(scanResult.carbs),
+        weight: baselineWeight
+      }
+    });
 
-    rememberFoodPortion(scanResult, finalWeight);
+    rememberFoodPortion(confirmedResult, finalWeight);
     if (!scanResult.isCustom && !scanResult.isCustomBarcode && !scanResult.isLearned) {
       rememberConfirmedProduct({
         ...scanResult,
@@ -1343,11 +1436,16 @@ export default function App() {
     setBarcodeResult(product);
     const w = getPreferredFoodWeight(product, product.weight || 100);
     setBarcodeEditedWeight(w);
-    const scale = w / 100;
-    setBarcodeScannedProtein(Math.round((product.protein || 0) * scale * 10) / 10);
-    setBarcodeScannedFat(Math.round((product.fat || 0) * scale * 10) / 10);
-    setBarcodeScannedCarbs(Math.round((product.carbs || 0) * scale * 10) / 10);
-    setBarcodeScannedCalories(Math.round((product.calories || 0) * scale));
+    const scaledNutrition = scaleNutritionPer100g({
+      calories: Number(product.calories) || 0,
+      protein: Number(product.protein) || 0,
+      fat: Number(product.fat) || 0,
+      carbs: Number(product.carbs) || 0
+    }, w) || { calories: 0, protein: 0, fat: 0, carbs: 0 };
+    setBarcodeScannedProtein(scaledNutrition.protein);
+    setBarcodeScannedFat(scaledNutrition.fat);
+    setBarcodeScannedCarbs(scaledNutrition.carbs);
+    setBarcodeScannedCalories(scaledNutrition.calories);
     return true;
   };
 
@@ -1469,13 +1567,24 @@ export default function App() {
     const defaultWeightVal = Number(customFoodWeight) || 100;
 
     const scaleTo100 = defaultWeightVal > 0 ? (100 / defaultWeightVal) : 1;
+    const normalizedNutrition = roundNutritionValues({
+      calories: kcalVal * scaleTo100,
+      protein: proteinVal * scaleTo100,
+      fat: fatVal * scaleTo100,
+      carbs: carbsVal * scaleTo100
+    }) || {
+      calories: 0,
+      protein: 0,
+      fat: 0,
+      carbs: 0
+    };
     const now = new Date().toISOString();
-    const normalizedFood = {
+    const legacyCustomFood = {
       name: customFoodName.trim(),
-      calories: Math.round(kcalVal * scaleTo100),
-      protein: Math.round(proteinVal * scaleTo100 * 10) / 10,
-      fat: Math.round(fatVal * scaleTo100 * 10) / 10,
-      carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
+      calories: normalizedNutrition.calories,
+      protein: normalizedNutrition.protein,
+      fat: normalizedNutrition.fat,
+      carbs: normalizedNutrition.carbs,
       weight: 100,
       brand: "Моя база",
       icon: "🏷️",
@@ -1485,6 +1594,11 @@ export default function App() {
       searchText: `${customFoodName.trim()} моя база введено вручну`.toLowerCase(),
       updatedAt: now
     };
+    const normalizedFood = createCustomFoodItem({
+      ...legacyCustomFood,
+      defaultPortionGrams: defaultWeightVal,
+      per100g: normalizedNutrition
+    });
 
     if (customFoodEditTarget?.type === 'barcode') {
       const barcode = customFoodEditTarget.barcode;
@@ -1566,13 +1680,24 @@ export default function App() {
     const defaultWeightVal = Number(fallbackWeight) || 100;
 
     const scaleTo100 = defaultWeightVal > 0 ? (100 / defaultWeightVal) : 1;
+    const normalizedNutrition = roundNutritionValues({
+      calories: kcalVal * scaleTo100,
+      protein: proteinVal * scaleTo100,
+      fat: fatVal * scaleTo100,
+      carbs: carbsVal * scaleTo100
+    }) || {
+      calories: 0,
+      protein: 0,
+      fat: 0,
+      carbs: 0
+    };
     const newProduct = {
       barcode: barcodeNotFound,
       name: fallbackName.trim(),
-      calories: Math.round(kcalVal * scaleTo100),
-      protein: Math.round(proteinVal * scaleTo100 * 10) / 10,
-      fat: Math.round(fatVal * scaleTo100 * 10) / 10,
-      carbs: Math.round(carbsVal * scaleTo100 * 10) / 10,
+      calories: normalizedNutrition.calories,
+      protein: normalizedNutrition.protein,
+      fat: normalizedNutrition.fat,
+      carbs: normalizedNutrition.carbs,
       weight: 100, // Базові нутрієнти зберігаємо на 100г
       brand: "Моя база",
       icon: "🏷️",
@@ -1736,19 +1861,25 @@ export default function App() {
     const fVal = f === '' ? 0 : (parseFloat(f) || 0);
     const cVal = c === '' ? 0 : (parseFloat(c) || 0);
     
-    const caloriesVal = Math.round(pVal * 4 + fVal * 9 + cVal * 4);
+    const caloriesVal = Math.round(calculateCaloriesFromMacros(pVal, fVal, cVal) ?? 0);
     setBarcodeScannedCalories(caloriesVal);
 
     if (barcodeResult) {
       const portionWeight = Number(barcodeEditedWeight) || 100;
       const scaleTo100 = portionWeight > 0 ? (100 / portionWeight) : 1;
+      const normalizedNutrition = roundNutritionValues({
+        protein: pVal * scaleTo100,
+        fat: fVal * scaleTo100,
+        carbs: cVal * scaleTo100,
+        calories: caloriesVal * scaleTo100
+      }) || { protein: 0, fat: 0, carbs: 0, calories: 0 };
       
       setBarcodeResult(prev => ({
         ...prev,
-        protein: Math.round(pVal * scaleTo100 * 10) / 10,
-        fat: Math.round(fVal * scaleTo100 * 10) / 10,
-        carbs: Math.round(cVal * scaleTo100 * 10) / 10,
-        calories: Math.round(caloriesVal * scaleTo100)
+        protein: normalizedNutrition.protein,
+        fat: normalizedNutrition.fat,
+        carbs: normalizedNutrition.carbs,
+        calories: normalizedNutrition.calories
       }));
     }
   };
@@ -1758,18 +1889,19 @@ export default function App() {
     setBarcodeEditedWeight(value);
     if (!barcodeResult) return;
     
-    const baselineWeight = 100;
     const currentWeightVal = Number(value) || 0;
-    const scale = currentWeightVal > 0 ? (currentWeightVal / baselineWeight) : 0;
-    
-    const p = Math.round(Number(barcodeResult.protein || 0) * scale * 10) / 10;
-    const f = Math.round(Number(barcodeResult.fat || 0) * scale * 10) / 10;
-    const c = Math.round(Number(barcodeResult.carbs || 0) * scale * 10) / 10;
+    const scaledNutrition = scaleNutritionPer100g({
+      calories: 0,
+      protein: Number(barcodeResult.protein) || 0,
+      fat: Number(barcodeResult.fat) || 0,
+      carbs: Number(barcodeResult.carbs) || 0
+    }, currentWeightVal) || { protein: 0, fat: 0, carbs: 0 };
+    const { protein: p, fat: f, carbs: c } = scaledNutrition;
     
     setBarcodeScannedProtein(p);
     setBarcodeScannedFat(f);
     setBarcodeScannedCarbs(c);
-    setBarcodeScannedCalories(Math.round(p * 4 + f * 9 + c * 4));
+    setBarcodeScannedCalories(Math.round(calculateCaloriesFromMacros(p, f, c) ?? 0));
   };
 
   // Додавання знайденого за штрих-кодом продукту у щоденник
@@ -1785,24 +1917,37 @@ export default function App() {
     const finalProtein = Number(barcodeScannedProtein) || 0;
     const finalFat = Number(barcodeScannedFat) || 0;
     const finalCarbs = Number(barcodeScannedCarbs) || 0;
+    const mealSource = (barcodeResult.isCustom || barcodeResult.isCustomBarcode) ? 'custom' : 'barcode_off';
+    const per100g = roundNutritionValues({
+      calories: finalCalories * (100 / finalWeight),
+      protein: finalProtein * (100 / finalWeight),
+      fat: finalFat * (100 / finalWeight),
+      carbs: finalCarbs * (100 / finalWeight)
+    });
 
-    const newMeal = {
+    const newMeal = createBarcodeMealEntry({
+      ...barcodeResult,
+      source: mealSource,
+      dataQuality: barcodeResult.dataQuality || (mealSource === 'custom' ? 'manual' : 'database'),
+      per100g,
+      defaultPortionGrams: finalWeight
+    }, finalWeight, {
       id: createMealId(),
-      name: barcodeResult.name,
-      calories: finalCalories,
-      protein: finalProtein,
-      fat: finalFat,
-      carbs: finalCarbs,
-      weight: finalWeight,
-      originalCalories: Number(barcodeResult.calories),
-      originalProtein: Number(barcodeResult.protein),
-      originalFat: Number(barcodeResult.fat),
-      originalCarbs: Number(barcodeResult.carbs),
-      originalWeight: baselineWeight,
-      category,
       date: selectedDate,
-      icon: getEmojiForCategory(category)
-    };
+      category,
+      mealType: category,
+      icon: getEmojiForCategory(category),
+      source: mealSource,
+      warning: barcodeResult.warning,
+      totals: { calories: finalCalories, protein: finalProtein, fat: finalFat, carbs: finalCarbs },
+      original: {
+        calories: Number(barcodeResult.calories),
+        protein: Number(barcodeResult.protein),
+        fat: Number(barcodeResult.fat),
+        carbs: Number(barcodeResult.carbs),
+        weight: baselineWeight
+      }
+    });
 
     rememberFoodPortion(barcodeResult, finalWeight);
     if (!barcodeResult.isCustom && !barcodeResult.isCustomBarcode && !barcodeResult.isLearned) {
@@ -1838,31 +1983,62 @@ export default function App() {
   // --- Manual Search Helper Functions ---
   const addSearchMealToDiary = () => {
     if (!selectedSearchFood) return;
-    const weightFactor = Number(searchFoodWeight) / Number(selectedSearchFood.weight);
-    const finalCalories = Math.round(Number(selectedSearchFood.calories) * weightFactor);
-    const finalProtein = Math.round(Number(selectedSearchFood.protein) * weightFactor * 10) / 10;
-    const finalFat = Math.round(Number(selectedSearchFood.fat) * weightFactor * 10) / 10;
-    const finalCarbs = Math.round(Number(selectedSearchFood.carbs) * weightFactor * 10) / 10;
 
-    const newMeal = {
+    const category = searchMealCategory;
+    const baselineWeight = Number(selectedSearchFood.weight) || 100;
+    const finalWeight = Number(searchFoodWeight) || baselineWeight;
+    const scaleTo100 = 100 / baselineWeight;
+    const isOffProduct = selectedSearchFood.source === 'openfoodfacts';
+    const isCustomProduct = selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode;
+    const foodSource = isOffProduct
+      ? 'barcode_off'
+      : selectedSearchFood.isAiSearch || selectedSearchFood.source === 'ai-search'
+        ? 'ai_estimate'
+        : selectedSearchFood.source || 'manual';
+    const per100g = roundNutritionValues({
+      calories: (Number(selectedSearchFood.calories) || 0) * (isOffProduct ? 1 : scaleTo100),
+      protein: (Number(selectedSearchFood.protein) || 0) * (isOffProduct ? 1 : scaleTo100),
+      fat: (Number(selectedSearchFood.fat) || 0) * (isOffProduct ? 1 : scaleTo100),
+      carbs: (Number(selectedSearchFood.carbs) || 0) * (isOffProduct ? 1 : scaleTo100)
+    });
+    const scaledNutrition = scaleNutritionPer100g(per100g, finalWeight) || { calories: 0, protein: 0, fat: 0, carbs: 0 };
+    const createMealEntry = isOffProduct
+      ? createBarcodeMealEntry
+      : isCustomProduct
+        ? createMealEntryFromCustomFood
+        : createManualMealEntry;
+
+    const newMeal = createMealEntry({
+      ...selectedSearchFood,
+      source: foodSource,
+      dataQuality: selectedSearchFood.dataQuality || (foodSource === 'manual' ? 'manual' : 'unknown'),
+      per100g,
+      defaultPortionGrams: finalWeight
+    }, finalWeight, {
       id: createMealId(),
-      name: selectedSearchFood.name,
-      calories: finalCalories,
-      protein: finalProtein,
-      fat: finalFat,
-      carbs: finalCarbs,
-      weight: Number(searchFoodWeight),
-      originalCalories: Number(selectedSearchFood.calories),
-      originalProtein: Number(selectedSearchFood.protein),
-      originalFat: Number(selectedSearchFood.fat),
-      originalCarbs: Number(selectedSearchFood.carbs),
-      originalWeight: Number(selectedSearchFood.weight),
-      category: searchMealCategory,
       date: selectedDate,
-      icon: selectedSearchFood.icon || getEmojiForCategory(searchMealCategory)
-    };
+      category,
+      mealType: category,
+      icon: selectedSearchFood.icon || getEmojiForCategory(category),
+      source: foodSource,
+      confidence: selectedSearchFood.confidence,
+      warning: selectedSearchFood.warning,
+      totals: scaledNutrition,
+      original: {
+        calories: Number(selectedSearchFood.calories),
+        protein: Number(selectedSearchFood.protein),
+        fat: Number(selectedSearchFood.fat),
+        carbs: Number(selectedSearchFood.carbs),
+        weight: baselineWeight
+      }
+    });
 
-    rememberFoodPortion(selectedSearchFood, Number(searchFoodWeight));
+    const finalCalories = newMeal.calories;
+    const finalProtein = newMeal.protein;
+    const finalFat = newMeal.fat;
+    const finalCarbs = newMeal.carbs;
+
+    rememberFoodPortion(selectedSearchFood, finalWeight);
     if (
       !selectedSearchFood.isCustom &&
       !selectedSearchFood.isCustomBarcode &&
@@ -1875,7 +2051,7 @@ export default function App() {
         protein: finalProtein,
         fat: finalFat,
         carbs: finalCarbs,
-        weight: Number(searchFoodWeight)
+        weight: finalWeight
       }, selectedSearchFood.source === 'openfoodfacts' ? 'barcode' : 'ai-search');
     }
     setMeals(prev => [newMeal, ...prev]);
@@ -1927,7 +2103,11 @@ export default function App() {
         ingredients: p.ingredients || null,
         icon: p.icon || "🔮",
         isAiSearch: true,
-        source: 'ai-search'
+        source: 'ai-search',
+        dataQuality: p.dataQuality || 'estimate',
+        needsManualNutrition: true,
+        confidence: Number.isFinite(Number(p.confidence)) ? Number(p.confidence) : null,
+        warning: p.warning || 'Підказка ШІ може бути приблизною. Введіть КБЖВ з етикетки або перевіреного джерела перед збереженням.'
       }));
 
       aiSearchCacheRef.current.set(cacheKey, {
@@ -1964,7 +2144,7 @@ export default function App() {
       sourceLabel: f.sourceLabel || "🧠 Збережено зі сканувань",
       icon: f.icon || "🍽️"
     })),
-    ...customFoods.map(f => ({ 
+    ...normalizedCustomFoods.map(f => ({
       ...f, 
       isCustom: true, 
       id: f.id || `custom-${f.name}-${Date.now()}`,
@@ -1980,7 +2160,7 @@ export default function App() {
     })),
     ...productCatalog,
     ...mockFoods
-  ], [learnedProducts, customFoods, customBarcodes]);
+  ], [learnedProducts, normalizedCustomFoods, customBarcodes]);
 
   const indexedCombinedFoods = useMemo(() => (
     combinedFoods.map((food, index) => ({
@@ -1992,20 +2172,11 @@ export default function App() {
 
   const normalizedSearchQuery = useMemo(() => normalizeSearchText(searchQuery), [searchQuery]);
   const searchTokens = useMemo(() => normalizedSearchQuery.split(/\s+/).filter(Boolean), [normalizedSearchQuery]);
-  const favoriteNameSet = useMemo(() => new Set(favorites.map(fav => normalizeSearchText(fav.name))), [favorites]);
-  const mealUsageStats = useMemo(() => {
-    const stats = new Map();
-    meals.forEach((meal, index) => {
-      const key = normalizeSearchText(meal.name);
-      if (!key) return;
-      const current = stats.get(key) || { count: 0, firstIndex: index };
-      stats.set(key, {
-        count: current.count + 1,
-        firstIndex: Math.min(current.firstIndex, index)
-      });
-    });
-    return stats;
-  }, [meals]);
+  const favoriteNameSet = useMemo(() => new Set(normalizedFavorites.map(fav => normalizeSearchText(fav.name))), [normalizedFavorites]);
+  const mealUsageStats = useMemo(
+    () => getUsageStats(normalizedMeals, { normalizeKey: normalizeSearchText }),
+    [normalizedMeals]
+  );
 
   const getFoodUsageCount = (food) => mealUsageStats.get(normalizeSearchText(food.name))?.count || 0;
 
@@ -2151,9 +2322,11 @@ export default function App() {
         const origCarbs = Number(meal.originalCarbs) || Number(meal.carbs);
 
         if (value === "") {
+          const clearedTotals = { calories: 0, protein: 0, fat: 0, carbs: 0 };
           return {
             ...meal,
             weight: "",
+            ...(meal.totals ? { servingGrams: "", totals: clearedTotals } : {}),
             calories: 0,
             protein: 0,
             fat: 0,
@@ -2169,15 +2342,22 @@ export default function App() {
         const newWeight = Number(value);
         if (isNaN(newWeight) || newWeight < 0) return meal;
 
-        const scale = newWeight / origWeight;
+        const scaleTo100 = 100 / origWeight;
+        const scaledNutrition = scaleNutritionPer100g({
+          calories: origCals * scaleTo100,
+          protein: origProt * scaleTo100,
+          fat: origFat * scaleTo100,
+          carbs: origCarbs * scaleTo100
+        }, newWeight) || { calories: 0, protein: 0, fat: 0, carbs: 0 };
 
         return {
           ...meal,
           weight: newWeight,
-          calories: Math.round(origCals * scale),
-          protein: Math.round(origProt * scale * 10) / 10,
-          fat: Math.round(origFat * scale * 10) / 10,
-          carbs: Math.round(origCarbs * scale * 10) / 10,
+          ...(meal.totals ? { servingGrams: newWeight, totals: scaledNutrition } : {}),
+          calories: scaledNutrition.calories,
+          protein: scaledNutrition.protein,
+          fat: scaledNutrition.fat,
+          carbs: scaledNutrition.carbs,
           originalWeight: origWeight,
           originalCalories: origCals,
           originalProtein: origProt,
@@ -2211,10 +2391,12 @@ export default function App() {
         const fVal = f === "" ? 0 : f;
         const cVal = c === "" ? 0 : c;
 
-        const newCals = Math.round(pVal * 4 + fVal * 9 + cVal * 4);
+        const newCals = Math.round(calculateCaloriesFromMacros(pVal, fVal, cVal) ?? 0);
+        const nextTotals = { calories: newCals, protein: pVal, fat: fVal, carbs: cVal };
 
         return {
           ...meal,
+          ...(meal.totals ? { totals: nextTotals } : {}),
           protein: p,
           fat: f,
           carbs: c,
@@ -2231,20 +2413,11 @@ export default function App() {
   };
 
   // --- Calculations for Current Day ---
-  const currentDayMeals = meals.filter(m => m.date === selectedDate);
-  
-  const totals = currentDayMeals.reduce((acc, m) => {
-    acc.calories += m.calories;
-    acc.protein += m.protein;
-    acc.fat += m.fat;
-    acc.carbs += m.carbs;
-    return acc;
-  }, { calories: 0, protein: 0, fat: 0, carbs: 0 });
-
-  // Округлити макроси
-  totals.protein = Math.round(totals.protein * 10) / 10;
-  totals.fat = Math.round(totals.fat * 10) / 10;
-  totals.carbs = Math.round(totals.carbs * 10) / 10;
+  const currentDayMeals = useMemo(() => getMealsByDate(normalizedMeals, selectedDate), [normalizedMeals, selectedDate]);
+  const totals = useMemo(() => getDailyTotals(currentDayMeals), [currentDayMeals]);
+  const currentDayMealsByCategory = useMemo(() => getMealsByCategory(currentDayMeals), [currentDayMeals]);
+  const currentDayCategoryTotals = useMemo(() => getCategoryTotals(currentDayMeals), [currentDayMeals]);
+  const macroProgress = useMemo(() => getMacroProgress(totals, profile), [totals, profile]);
 
   const currentWater = waterIntake[selectedDate] || 0;
 
@@ -2275,33 +2448,22 @@ export default function App() {
   };
 
   const repeatMeal = (meal) => {
-    const repeatedMeal = {
-      ...meal,
+    const sourceMeal = meals.find(m => m.id === meal.id) || meal;
+    const repeatedMeal = cloneMealEntryForDate(sourceMeal, selectedDate, {
       id: createMealId(),
-      date: selectedDate,
-      repeatedFrom: meal.id,
+      repeatedFrom: sourceMeal.id,
       repeatedAt: new Date().toISOString()
-    };
+    });
 
     setMeals(prev => [repeatedMeal, ...prev]);
-    showToast(`"${meal.name}" додано ще раз`, "success");
+    showToast(`"${sourceMeal.name}" додано ще раз`, "success");
   };
 
   const [activeCopyMenu, setActiveCopyMenu] = useState(null);
 
-  const getRecentDatesForCategory = (categoryName) => {
-    const dates = [];
-    const sortedMeals = [...meals].sort((a, b) => b.date.localeCompare(a.date));
-    
-    for (const m of sortedMeals) {
-      const mCat = m.category === 'Перекус' ? 'Перший перекус' : m.category;
-      if (mCat === categoryName && m.date !== selectedDate && !dates.includes(m.date)) {
-        dates.push(m.date);
-        if (dates.length >= 3) break;
-      }
-    }
-    return dates;
-  };
+  const getRecentDatesForCategory = (categoryName) => (
+    selectRecentDatesForCategory(normalizedMeals, categoryName, selectedDate)
+  );
 
   const copyCategoryMeals = (categoryName, sourceDate) => {
     const sourceMeals = meals.filter(m => {
@@ -2314,14 +2476,13 @@ export default function App() {
       return;
     }
     
-    const newMeals = sourceMeals.map(m => ({
-      ...m,
-      id: createMealId(),
-      date: selectedDate,
-      time: new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }),
-      copiedFrom: m.id,
-      copiedAt: new Date().toISOString()
-    }));
+    const copiedAt = new Date().toISOString();
+    const copiedTime = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+    const newMeals = copyMealEntriesForDate(sourceMeals, selectedDate, {
+      createId: createMealId,
+      time: copiedTime,
+      copiedAt
+    });
     
     setMeals(prev => [...newMeals, ...prev]);
     showToast(`Скопійовано ${categoryName} (${newMeals.length} шт.)`, "success");
@@ -2383,34 +2544,29 @@ export default function App() {
   // Експорт та імпорт даних користувача (Бекапи)
   const exportUserData = () => {
     try {
-      const exportData = {
-        version: "1.0.0",
-        exportedAt: new Date().toISOString(),
+      const exportData = createBackupPayload({
         meals,
         waterIntake,
-        weight_log: weightLog,
+        weightLog,
         profile,
         customFoods,
         customBarcodes,
+        favorites,
         learnedProducts,
         rememberedFoodPortions,
-        apiKey: apiKey === SERVER_GEMINI_API_KEY ? '' : apiKey,
-        openAiApiKey,
-        openAiProxyUrl,
         scanMode,
         geminiModel,
         openAiModel,
         theme
-      };
+      });
       
       const jsonString = JSON.stringify(exportData, null, 2);
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       
       const link = document.createElement('a');
-      const dateStr = getTodayString().replace(/-/g, '');
       link.href = url;
-      link.download = `nutrisnap_backup_${dateStr}.json`;
+      link.download = createBackupFilename(getTodayString());
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -2433,63 +2589,67 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const importedData = JSON.parse(event.target.result);
+        const importedData = parseBackupFileContent(event.target.result);
+        const restoreData = prepareRestoreData(importedData);
         
-        // Валідація структури
-        if (!importedData || typeof importedData !== 'object') {
-          throw new Error("Невірний формат файлу. Очікувався об'єкт JSON.");
+        // Restore state here; DOM, state setters and toasts stay in App.jsx.
+        if (restoreData.meals !== undefined) {
+          setMeals(restoreData.meals);
         }
-        
-        // Відновимо дані
-        if (importedData.meals && Array.isArray(importedData.meals)) {
-          setMeals(importedData.meals);
+        if (restoreData.waterIntake !== undefined) {
+          setWaterIntake(restoreData.waterIntake);
         }
-        if (importedData.waterIntake && typeof importedData.waterIntake === 'object') {
-          setWaterIntake(importedData.waterIntake);
+        if (restoreData.weightLog !== undefined) {
+          setWeightLog(restoreData.weightLog);
         }
-        if (importedData.weight_log && typeof importedData.weight_log === 'object') {
-          setWeightLog(importedData.weight_log);
+        if (restoreData.profile !== undefined) {
+          setProfile(prev => ({ ...prev, ...restoreData.profile }));
         }
-        if (importedData.profile && typeof importedData.profile === 'object') {
-          setProfile(prev => ({ ...prev, ...importedData.profile }));
+        if (restoreData.customFoods !== undefined) {
+          setCustomFoods(restoreData.customFoods);
         }
-        if (Array.isArray(importedData.customFoods)) {
-          setCustomFoods(importedData.customFoods);
+        if (restoreData.favorites !== undefined) {
+          setFavorites(restoreData.favorites);
         }
-        if (Array.isArray(importedData.learnedProducts)) {
-          setLearnedProducts(importedData.learnedProducts);
+        if (restoreData.learnedProducts !== undefined) {
+          setLearnedProducts(restoreData.learnedProducts);
           refreshLearnedProducts();
         }
-        if (importedData.customBarcodes && typeof importedData.customBarcodes === 'object') {
-          setCustomBarcodes(importedData.customBarcodes);
+        if (restoreData.customBarcodes !== undefined) {
+          setCustomBarcodes(restoreData.customBarcodes);
         }
-        if (importedData.rememberedFoodPortions && typeof importedData.rememberedFoodPortions === 'object') {
-          setRememberedFoodPortions(importedData.rememberedFoodPortions);
+        if (restoreData.rememberedFoodPortions !== undefined) {
+          setRememberedFoodPortions(restoreData.rememberedFoodPortions);
         }
-        if (importedData.apiKey !== undefined) {
-          const importedApiKey = String(importedData.apiKey || '').trim();
+        // Legacy backups may contain credentials. New backups intentionally omit them.
+        if (restoreData.apiKey !== undefined) {
+          const importedApiKey = String(restoreData.apiKey || '').trim();
           setApiKey(importedApiKey || DEFAULT_API_KEY);
         }
-        if (importedData.openAiApiKey !== undefined) {
-          setOpenAiApiKey(String(importedData.openAiApiKey || '').trim());
+        if (restoreData.openAiApiKey !== undefined) {
+          setOpenAiApiKey(String(restoreData.openAiApiKey || '').trim());
         }
-        if (importedData.openAiProxyUrl !== undefined) {
-          setOpenAiProxyUrl(String(importedData.openAiProxyUrl || '').trim());
+        if (restoreData.openAiProxyUrl !== undefined) {
+          setOpenAiProxyUrl(String(restoreData.openAiProxyUrl || '').trim());
         }
-        if (importedData.scanMode !== undefined) {
-          setScanMode(importedData.scanMode);
+        if (restoreData.scanMode !== undefined) {
+          setScanMode(restoreData.scanMode);
         }
-        if (importedData.geminiModel !== undefined) {
-          setGeminiModel(importedData.geminiModel);
+        if (restoreData.geminiModel !== undefined) {
+          setGeminiModel(restoreData.geminiModel);
         }
-        if (importedData.openAiModel !== undefined) {
-          setOpenAiModel(importedData.openAiModel);
+        if (restoreData.openAiModel !== undefined) {
+          setOpenAiModel(restoreData.openAiModel);
         }
-        if (importedData.theme !== undefined) {
-          setTheme(importedData.theme);
+        if (restoreData.theme !== undefined) {
+          setTheme(restoreData.theme);
         }
         
-        showToast("Дані успішно імпортовано! Додаток оновлено.", "success");
+        if (restoreData.hasCredentialFields) {
+          showToast("Дані успішно імпортовано! Додаток оновлено.", "success");
+        } else {
+          showToast("Дані імпортовано. API-ключі не входять у резервну копію — введіть їх повторно у налаштуваннях ШІ.", "warning", { duration: 7000 });
+        }
         e.target.value = '';
       } catch (error) {
         console.error("Помилка імпорту даних:", error);
@@ -2614,7 +2774,7 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const calPercent = Math.min((totals.calories / profile.targetCalories) * 100, 100);
+  const calPercent = macroProgress.calories;
   const radius = 58;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (calPercent / 100) * circumference;
@@ -2622,111 +2782,22 @@ export default function App() {
 
 
   // Дані аналітики за 7 днів
-  const weeklyAnalytics = useMemo(() => {
-    const days = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = getTodayString(d);
-      const dayMeals = meals.filter(m => m.date === dateStr);
-      const dayCalories = dayMeals.reduce((sum, m) => sum + (Number(m.calories) || 0), 0);
-      const dayWater = waterIntake[dateStr] || 0;
-      days.push({
-        dateStr,
-        label: d.toLocaleDateString('uk-UA', { weekday: 'short' }),
-        dayNum: d.getDate(),
-        calories: dayCalories,
-        protein: Math.round(dayMeals.reduce((sum, m) => sum + (Number(m.protein) || 0), 0) * 10) / 10,
-        fat: Math.round(dayMeals.reduce((sum, m) => sum + (Number(m.fat) || 0), 0) * 10) / 10,
-        carbs: Math.round(dayMeals.reduce((sum, m) => sum + (Number(m.carbs) || 0), 0) * 10) / 10,
-        water: dayWater,
-        goalPercent: profile.targetCalories > 0 ? Math.min(Math.round((dayCalories / profile.targetCalories) * 100), 100) : 0,
-        isToday: dateStr === getTodayString()
-      });
-    }
-    return days;
-  }, [meals, waterIntake, profile.targetCalories]);
+  const weeklyAnalytics = useMemo(() => getWeeklyTotals(normalizedMeals, getTodayString(), {
+    waterIntake,
+    targetCalories: profile.targetCalories
+  }), [normalizedMeals, waterIntake, profile.targetCalories]);
+  const weeklyAverages = useMemo(() => getWeeklyAverages(weeklyAnalytics), [weeklyAnalytics]);
 
   // Дані аналітики ваги за 30 днів
-  const weightAnalytics = useMemo(() => {
-    const days = [];
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = getTodayString(d);
-      const weightVal = weightLog[dateStr] || null;
-      days.push({
-        dateStr,
-        dateObj: d,
-        weight: weightVal ? Number(weightVal) : null,
-        label: d.toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })
-      });
-    }
-    return days;
-  }, [weightLog]);
+  const weightTrendData = useMemo(() => getWeightTrendData(weightLog, {
+    endDate: getTodayString(),
+    days: 30
+  }), [weightLog]);
+  const weightAnalytics = weightTrendData.days;
+  const weightTrend = weightTrendData.trend;
+  const todayWeight = useMemo(() => getWeightForDate(weightLog, getTodayString()), [weightLog]);
 
-  // Розрахунок лінії тренду ваги за 30 днів
-  const weightTrend = useMemo(() => {
-    const points = [];
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = getTodayString(d);
-      if (weightLog[dateStr] !== undefined && weightLog[dateStr] !== null) {
-        points.push({
-          x: 29 - i,
-          y: Number(weightLog[dateStr])
-        });
-      }
-    }
-    
-    if (points.length < 2) {
-      return { slope: 0, intercept: 0, hasTrend: false, pointsCount: points.length };
-    }
-    
-    const n = points.length;
-    const sumX = points.reduce((sum, p) => sum + p.x, 0);
-    const sumY = points.reduce((sum, p) => sum + p.y, 0);
-    const sumXY = points.reduce((sum, p) => sum + p.x * p.y, 0);
-    const sumXX = points.reduce((sum, p) => sum + p.x * p.x, 0);
-    
-    const meanX = sumX / n;
-    const meanY = sumY / n;
-    
-    const numerator = points.reduce((sum, p) => sum + (p.x - meanX) * (p.y - meanY), 0);
-    const denominator = points.reduce((sum, p) => sum + (p.x - meanX) * (p.x - meanX), 0);
-    
-    let slope = 0;
-    if (denominator !== 0) {
-      slope = numerator / denominator;
-    }
-    const intercept = meanY - slope * meanX;
-    
-    return {
-      slope,
-      intercept,
-      hasTrend: true,
-      pointsCount: n
-    };
-  }, [weightLog]);
-
-  // Середній калораж за останні 30 днів (з днів, де записана хоча б одна страва)
-  const thirtyDayCaloriesAvg = useMemo(() => {
-    let totalCals = 0;
-    let loggedDaysCount = 0;
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = getTodayString(d);
-      const dayMeals = meals.filter(m => m.date === dateStr);
-      if (dayMeals.length > 0) {
-        const dayCalories = dayMeals.reduce((sum, m) => sum + (Number(m.calories) || 0), 0);
-        totalCals += dayCalories;
-        loggedDaysCount++;
-      }
-    }
-    return loggedDaysCount > 0 ? Math.round(totalCals / loggedDaysCount) : 0;
-  }, [meals]);
+  const thirtyDayCaloriesAvg = useMemo(() => getThirtyDayAverage(normalizedMeals, getTodayString()), [normalizedMeals]);
 
   // Перемикання дат
   const changeDate = (days) => {
@@ -2743,15 +2814,21 @@ export default function App() {
   return (
     <div className="app-container">
       {isBarcodeLiveScannerOpen && (
-        <BarcodeScanner
-          onDetected={handleBarcodeDetectedLocally}
-          onError={(message) => {
-            setBarcodeError(message);
-            showToast(message, 'error');
-          }}
-          onClose={() => setIsBarcodeLiveScannerOpen(false)}
-          onFallback={handleBarcodeScannerFallback}
-        />
+        <Suspense fallback={(
+          <div className="barcode-scanner-overlay">
+            <p className="barcode-scanner-status">Завантаження сканера...</p>
+          </div>
+        )}>
+          <BarcodeScanner
+            onDetected={handleBarcodeDetectedLocally}
+            onError={(message) => {
+              setBarcodeError(message);
+              showToast(message, 'error');
+            }}
+            onClose={() => setIsBarcodeLiveScannerOpen(false)}
+            onFallback={handleBarcodeScannerFallback}
+          />
+        </Suspense>
       )}
       
       {/* --- App Header --- */}
@@ -2879,7 +2956,7 @@ export default function App() {
                     <div className="macro-bar-track">
                       <div 
                         className="macro-bar-fill fill-protein" 
-                        style={{ width: `${Math.min((totals.protein / profile.targetProtein) * 100, 100)}%` }}
+                        style={{ width: `${macroProgress.protein}%` }}
                       ></div>
                     </div>
                   </div>
@@ -2900,7 +2977,7 @@ export default function App() {
                     <div className="macro-bar-track">
                       <div 
                         className="macro-bar-fill fill-fat" 
-                        style={{ width: `${Math.min((totals.fat / profile.targetFat) * 100, 100)}%` }}
+                        style={{ width: `${macroProgress.fat}%` }}
                       ></div>
                     </div>
                   </div>
@@ -2921,7 +2998,7 @@ export default function App() {
                     <div className="macro-bar-track">
                       <div 
                         className="macro-bar-fill fill-carbs" 
-                        style={{ width: `${Math.min((totals.carbs / profile.targetCarbs) * 100, 100)}%` }}
+                        style={{ width: `${macroProgress.carbs}%` }}
                       ></div>
                     </div>
                   </div>
@@ -3028,11 +3105,11 @@ export default function App() {
             )}
 
             {/* Favorites Scroll Tray */}
-            {favorites.length > 0 && (
+            {normalizedFavorites.length > 0 && (
               <div className="favorites-container" style={{ marginTop: '24px' }}>
                 <h3 className="section-title" style={{ marginBottom: '12px' }}>Обрані страви</h3>
                 <div className="favorites-scroll-tray">
-                  {favorites.map((fav, index) => (
+                  {normalizedFavorites.map((fav, index) => (
                     <div key={index} className="favorite-meal-card">
                       {fav.image ? (
                         <img src={fav.image} alt={fav.name} className="favorite-meal-img" />
@@ -3051,24 +3128,13 @@ export default function App() {
                           className="btn-fav-add" 
                           onClick={() => {
                             const category = getDefaultCategory();
-                            const newMeal = {
+                            const newMeal = createMealEntryFromFavorite(fav, {
                               id: createMealId(),
-                              name: fav.name,
-                              calories: Number(fav.calories) || 0,
-                              protein: Number(fav.protein) || 0,
-                              fat: Number(fav.fat) || 0,
-                              carbs: Number(fav.carbs) || 0,
-                              weight: Number(fav.weight) || 100,
-                              originalCalories: Number(fav.calories) || 0,
-                              originalProtein: Number(fav.protein) || 0,
-                              originalFat: Number(fav.fat) || 0,
-                              originalCarbs: Number(fav.carbs) || 0,
-                              originalWeight: Number(fav.weight) || 100,
-                              category,
                               date: selectedDate,
-                              icon: getEmojiForCategory(category),
-                              image: fav.image || ''
-                            };
+                              category,
+                              mealType: category,
+                              icon: getEmojiForCategory(category)
+                            });
                             setMeals(prev => [newMeal, ...prev]);
                             showToast(`"${fav.name}" додано до щоденника!`, "success");
                           }}
@@ -3079,7 +3145,7 @@ export default function App() {
                         <button 
                           className="btn-fav-remove" 
                           onClick={() => {
-                            setFavorites(prev => prev.filter(f => f.name.toLowerCase() !== fav.name.toLowerCase()));
+                            setFavorites(prev => prev.filter(f => normalizeSearchText(f.name) !== normalizeSearchText(fav.name)));
                             showToast(`"${fav.name}" видалено з обраного`, "info");
                           }}
                           title="Видалити з шаблонів"
@@ -3121,11 +3187,8 @@ export default function App() {
                   { name: 'Вечеря', icon: '🥗' }
                 ];
                 return categories.map(cat => {
-                  const catMeals = currentDayMeals.filter(m => {
-                    const normalizedCat = m.category === 'Перекус' ? 'Перший перекус' : m.category;
-                    return normalizedCat === cat.name;
-                  });
-                  const catCals = catMeals.reduce((sum, m) => sum + (Number(m.calories) || 0), 0);
+                  const catMeals = currentDayMealsByCategory[cat.name] || [];
+                  const catCals = currentDayCategoryTotals[cat.name]?.calories || 0;
                   
                   return (
                     <div key={cat.name} className="meal-category-card">
@@ -3445,6 +3508,8 @@ export default function App() {
                       <p style={{ fontSize: '13px', color: '#94a3b8', maxWidth: '280px', marginBottom: '24px', lineHeight: '1.6' }}>
                         Фото ШІ може помилятися або впиратися в квоти. Для точного запису відкрийте ручне внесення КБЖВ з етикетки.
                       </p>
+
+                      {!aiPhotoNoticeAccepted && renderAiPhotoNotice()}
                       
                       {cameraError && (
                         <p style={{ fontSize: '12px', color: '#f87171', maxWidth: '280px', marginBottom: '16px', background: 'rgba(239, 68, 68, 0.1)', padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
@@ -3544,6 +3609,7 @@ export default function App() {
 
                   {cameraActive && !isScanning && !scanResult && (
                     <div className="scanner-overlay">
+                      {!aiPhotoNoticeAccepted && renderAiPhotoNotice(true)}
                       <div className="scanner-instruction-label">
                         Наведіть камеру на страву
                       </div>
@@ -3629,7 +3695,17 @@ export default function App() {
 
                       <div className="results-macros-grid">
                         <div className="results-macro-box box-kcal">
-                          <div className="macro-box-val" style={{ color: 'var(--color-calories)' }}>{scannedCalories}</div>
+                          <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
+                            <input
+                              type="number"
+                              className="macro-box-input"
+                              value={scannedCalories}
+                              onChange={(e) => setScannedCalories(e.target.value)}
+                              style={{ color: 'var(--color-calories)' }}
+                              min="0"
+                              step="1"
+                            />
+                          </div>
                           <div className="macro-box-label">ккал</div>
                         </div>
                         <div className="results-macro-box box-protein">
@@ -3726,7 +3802,7 @@ export default function App() {
                         <div style={{ display: 'flex', gap: '10px' }}>
                           <button className="btn-primary" style={{ flex: 1 }} onClick={addScannedMealToDiary}>
                             <Check size={18} />
-                            Додати до щоденника
+                            Зберегти
                           </button>
                           
                           <button 
@@ -3756,7 +3832,7 @@ export default function App() {
                             setScanResult(null);
                           }}
                         >
-                          Сканувати знову
+                          Скасувати
                         </button>
                       </div>
                     </div>
@@ -4442,14 +4518,11 @@ export default function App() {
                             className="search-food-item"
                             style={{ borderLeft: `4px solid ${borderCol}` }}
                             onClick={() => {
-                              setCustomFoodName(food.name);
-                              setCustomFoodCalories('');
-                              setCustomFoodProtein('');
-                              setCustomFoodFat('');
-                              setCustomFoodCarbs('');
-                              setCustomFoodWeight(food.weight || '100');
-                              setCustomFoodEditTarget(null);
-                              setIsCustomFoodModalOpen(true);
+                              openCustomFoodForm({
+                                name: food.name,
+                                weight: food.weight || '100',
+                                notice: food.warning || 'Підказка ШІ може бути приблизною. Введіть КБЖВ з етикетки або перевіреного джерела перед збереженням.'
+                              });
                             }}
                           >
                             <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🔮'}</span>
@@ -4891,7 +4964,7 @@ export default function App() {
                     {getDaysInMonthGrid(calendarDate).map((cell, idx) => {
                       const isToday = cell.dateString === getTodayString();
                       const isSelected = cell.dateString === selectedDate;
-                      const hasMeals = meals.some(m => m.date === cell.dateString);
+                      const hasMeals = calendarMealIndicators.has(cell.dateString);
                       const hasWater = waterIntake[cell.dateString] > 0;
                       
                       return (
@@ -4969,11 +5042,8 @@ export default function App() {
                   { name: 'Вечеря', icon: '🥗' }
                 ];
                 return categories.map(cat => {
-                  const catMeals = currentDayMeals.filter(m => {
-                    const normalizedCat = m.category === 'Перекус' ? 'Перший перекус' : m.category;
-                    return normalizedCat === cat.name;
-                  });
-                  const catCals = catMeals.reduce((sum, m) => sum + (Number(m.calories) || 0), 0);
+                  const catMeals = currentDayMealsByCategory[cat.name] || [];
+                  const catCals = currentDayCategoryTotals[cat.name]?.calories || 0;
                   
                   return (
                     <div key={cat.name} className="meal-category-card">
@@ -5419,7 +5489,7 @@ export default function App() {
                   </button>
                 </div>
                 
-                {weightLog[getTodayString()] && (
+                {todayWeight && (
                   <div style={{ 
                     marginTop: '12px', 
                     padding: '8px 12px', 
@@ -5430,7 +5500,7 @@ export default function App() {
                     color: '#34d399',
                     display: 'inline-block'
                   }}>
-                    Сьогодні вже записано: <strong>{weightLog[getTodayString()]} кг</strong>
+                    Сьогодні вже записано: <strong>{todayWeight} кг</strong>
                   </div>
                 )}
               </div>
@@ -5484,11 +5554,10 @@ export default function App() {
             <div className="glass-card" style={{ marginTop: '12px' }}>
               <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '14px' }}>Середні показники за тиждень</h3>
               {(() => {
-                const activeDays = weeklyAnalytics.filter(d => d.calories > 0);
-                const avgCals = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.calories, 0) / activeDays.length) : 0;
-                const avgProtein = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.protein, 0) / activeDays.length * 10) / 10 : 0;
-                const avgWater = activeDays.length > 0 ? Math.round(activeDays.reduce((s, d) => s + d.water, 0) / activeDays.length) : 0;
-                const loggedDays = activeDays.length;
+                const avgCals = weeklyAverages.calories;
+                const avgProtein = weeklyAverages.protein;
+                const avgWater = weeklyAverages.water;
+                const loggedDays = weeklyAverages.loggedDays;
                 return (
                   <div className="analytics-stats-grid">
                     <div className="analytics-stat-card">
@@ -6119,6 +6188,9 @@ export default function App() {
                 <p style={{ fontSize: '12px', color: 'var(--text-dark-muted)', marginBottom: '8px', lineHeight: '1.4' }}>
                   Ви можете зберегти всі свої дані (профіль, історію споживання їжі та води, налаштування) у файл та згодом відновити їх на іншому пристрої.
                 </p>
+                <p style={{ fontSize: '12px', color: 'var(--text-dark-muted)', marginBottom: '8px', lineHeight: '1.4' }}>
+                  API-ключі Gemini/OpenAI та OpenAI proxy URL не входять у резервну копію. Після відновлення введіть їх повторно у налаштуваннях ШІ.
+                </p>
                 
                 <div className="backup-btn-group">
                   <button 
@@ -6274,6 +6346,13 @@ export default function App() {
                   onChange={(e) => setCustomFoodName(e.target.value)}
                 />
               </div>
+
+              {customFoodNotice && (
+                <div className="manual-food-notice">
+                  <AlertCircle size={16} />
+                  <span>{customFoodNotice}</span>
+                </div>
+              )}
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div className="settings-group" style={{ textAlign: 'left' }}>

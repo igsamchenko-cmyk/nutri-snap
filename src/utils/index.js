@@ -1,3 +1,5 @@
+﻿import { roundNutritionValues } from '../services/nutrition';
+
 export const PRODUCT_IMPORT_FIELDS = {
   name: ["name", "назва", "продукт", "title"],
   brand: ["brand", "бренд", "виробник"],
@@ -110,6 +112,14 @@ export function normalizeImportedProduct(row, index) {
   const brand = String(getImportField(row, "brand") || "").trim();
   const supermarket = String(getImportField(row, "supermarket") || "").trim();
   const aliases = aliasesFromImport(getImportField(row, "aliases"));
+  const nutrition = roundNutritionValues({
+    calories: numberFromImport(getImportField(row, "calories")) * scaleTo100,
+    protein: numberFromImport(getImportField(row, "protein")) * scaleTo100,
+    fat: numberFromImport(getImportField(row, "fat")) * scaleTo100,
+    carbs: numberFromImport(getImportField(row, "carbs")) * scaleTo100
+  });
+
+  if (!nutrition) return null;
 
   return {
     id: barcode || `imported-${Date.now()}-${index}`,
@@ -118,10 +128,10 @@ export function normalizeImportedProduct(row, index) {
     brand: brand || "Моя база",
     supermarket,
     category: String(getImportField(row, "category") || "Інше").trim(),
-    calories: Math.round(numberFromImport(getImportField(row, "calories")) * scaleTo100),
-    protein: Math.round(numberFromImport(getImportField(row, "protein")) * scaleTo100 * 10) / 10,
-    fat: Math.round(numberFromImport(getImportField(row, "fat")) * scaleTo100 * 10) / 10,
-    carbs: Math.round(numberFromImport(getImportField(row, "carbs")) * scaleTo100 * 10) / 10,
+    calories: nutrition.calories,
+    protein: nutrition.protein,
+    fat: nutrition.fat,
+    carbs: nutrition.carbs,
     weight: 100,
     icon: String(getImportField(row, "icon") || "🏷️").trim(),
     aliases,
