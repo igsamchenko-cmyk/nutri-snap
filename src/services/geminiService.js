@@ -1,5 +1,6 @@
-import { requestGeminiContent, SERVER_GEMINI_API_KEY } from './geminiClient.js';
+﻿import { requestGeminiContent, SERVER_GEMINI_API_KEY } from './geminiClient.js';
 import { downscaleImageToBase64 } from '../utils/imageUtils.js';
+import { filterValidAiNutritionResults, getValidatedAiNutritionResult } from './aiNutritionValidation.js';
 
 export { SERVER_GEMINI_API_KEY };
 
@@ -172,12 +173,17 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
 
     // Парсимо JSON
     const parsedData = JSON.parse(textResponse);
-    return {
+    return getValidatedAiNutritionResult({
       ...parsedData,
       dataQuality: parsedData.dataQuality || "estimate",
       needsManualNutrition: Boolean(parsedData.needsManualNutrition),
       warning: parsedData.warning || "КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням."
-    };
+    }, {
+      requireConfidence: true,
+      requireNeedsManualNutrition: true,
+      confidenceMax: 99,
+      defaultDataQuality: "estimate"
+    });
 
   } catch (error) {
     console.error("Error in analyzeFoodImage:", error);
@@ -361,12 +367,16 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
     }
 
     const parsedData = JSON.parse(textResponse);
-    return {
+    return getValidatedAiNutritionResult({
       ...parsedData,
       dataQuality: parsedData.dataQuality || "insufficient",
       needsManualNutrition: Boolean(parsedData.needsManualNutrition),
       warning: parsedData.warning || "Використовуйте тільки дані, які видно на етикетці."
-    };
+    }, {
+      allowedDataQualities: ["label_read", "insufficient"],
+      defaultDataQuality: "insufficient",
+      requireNeedsManualNutrition: true
+    });
   } catch (error) {
     console.error("Error in analyzeProductPackagingImage:", error);
     if (error instanceof SyntaxError) {
@@ -439,7 +449,10 @@ export async function searchSmartProducts(query, apiKey, modelName = 'gemini-2.5
     }
 
     const parsedData = JSON.parse(textResponse);
-    return Array.isArray(parsedData) ? parsedData : [];
+    return filterValidAiNutritionResults(parsedData, {
+      calorieTolerance: 50,
+      defaultEstimateWarning: 'Підказка ШІ може бути приблизною. Введіть КБЖВ з етикетки або перевіреного джерела перед збереженням.'
+    });
   } catch (error) {
     console.error("Error in searchSupermarketProducts:", error);
     if (error instanceof SyntaxError) {
