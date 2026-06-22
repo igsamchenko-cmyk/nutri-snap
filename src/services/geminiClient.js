@@ -1,3 +1,10 @@
+import {
+  createRequestTimeout,
+  isAbortError,
+  normalizeAbortError,
+  sleepWithAbort
+} from '../utils/requestTimeout.js';
+
 /**
  * Shared Gemini client with retry, exponential backoff, and model fallback.
  */
@@ -10,8 +17,6 @@ export const GEMINI_MODEL_FALLBACK_CHAIN = [
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 2000;
-
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function parseQuotaScope(errorData) {
   const raw = JSON.stringify(errorData || {}).toLowerCase();
@@ -58,7 +63,7 @@ function buildApiError(response, errorData) {
   return new Error(msg || `Помилка Gemini API (код: ${response.status})`);
 }
 
-async function requestOnce(modelName, payload, apiKey) {
+async function requestOnce(modelName, payload, apiKey, signal) {
   const useServerKey = apiKey === SERVER_GEMINI_API_KEY;
   const url = useServerKey
     ? `/api/gemini/${encodeURIComponent(modelName)}`
@@ -72,7 +77,8 @@ async function requestOnce(modelName, payload, apiKey) {
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal
   });
 
   if (response.ok) {
@@ -83,43 +89,55 @@ async function requestOnce(modelName, payload, apiKey) {
   return { ok: false, status: response.status, response, errorData };
 }
 
-export async function requestGeminiContent(modelName, payload, apiKey) {
-  const chain = [modelName, ...GEMINI_MODEL_FALLBACK_CHAIN.filter(m => m !== modelName)];
-  let lastError = null;
+export async function requestGeminiContent(modelName, payload, apiKey, options = {}) {
+  const timeout = createRequestTimeout(options.timeoutMs, options.timeoutMessage);
 
-  for (const model of chain) {
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const result = await requestOnce(model, payload, apiKey);
+  try {
+    const chain = [modelName, ...GEMINI_MODEL_FALLBACK_CHAIN.filter(m => m !== modelName)];
+    let lastError = null;
 
-      if (result.ok) {
-        return result.data;
+    for (const model of chain) {
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        timeout.throwIfAborted();
+        const result = await requestOnce(model, payload, apiKey, timeout.signal);
+
+        if (result.ok) {
+          return result.data;
+        }
+
+        const { status, errorData } = result;
+        const retriable = status === 429 || status === 503;
+
+        if (retriable && attempt < MAX_RETRIES) {
+          const apiDelay = extractRetryDelayMs(errorData);
+          const delay = apiDelay || BASE_DELAY_MS * 2 ** attempt + Math.random() * 500;
+          await sleepWithAbort(delay, timeout.signal, options.timeoutMessage);
+          continue;
+        }
+
+        if (status === 429) {
+          lastError = buildQuotaError(errorData);
+          break;
+        }
+
+        if (status === 404) {
+          lastError = buildApiError(result.response, errorData);
+          break;
+        }
+
+        throw buildApiError(result.response, errorData);
       }
-
-      const { status, errorData } = result;
-      const retriable = status === 429 || status === 503;
-
-      if (retriable && attempt < MAX_RETRIES) {
-        const apiDelay = extractRetryDelayMs(errorData);
-        const delay = apiDelay || BASE_DELAY_MS * 2 ** attempt + Math.random() * 500;
-        await sleep(delay);
-        continue;
-      }
-
-      if (status === 429) {
-        lastError = buildQuotaError(errorData);
-        break;
-      }
-
-      if (status === 404) {
-        lastError = buildApiError(result.response, errorData);
-        break;
-      }
-
-      throw buildApiError(result.response, errorData);
     }
-  }
 
-  throw lastError || new Error('Не вдалося виконати запит до Gemini API.');
+    throw lastError || new Error('\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0432\u0438\u043a\u043e\u043d\u0430\u0442\u0438 \u0437\u0430\u043f\u0438\u0442 \u0434\u043e Gemini API.');
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw normalizeAbortError(error, options.timeoutMessage);
+    }
+    throw error;
+  } finally {
+    timeout.clear();
+  }
 }
 
 function extractRetryDelayMs(errorData) {

@@ -1,4 +1,20 @@
-﻿import { downscaleImageToBase64 } from '../utils/imageUtils.js';
+﻿import {
+  AI_FOOD_IMAGE_JPEG_QUALITY,
+  AI_FOOD_IMAGE_MAX_SIDE,
+  downscaleImageToBase64
+} from '../utils/imageUtils.js';
+import {
+  getAiPerformanceNow,
+  getBase64PayloadSizeKb,
+  logAiPayload,
+  logAiPerformance
+} from '../utils/aiPerformance.js';
+import {
+  AI_PHOTO_REQUEST_TIMEOUT_MESSAGE,
+  AI_PHOTO_REQUEST_TIMEOUT_MS,
+  fetchWithAbortTimeout,
+  isAbortError
+} from '../utils/requestTimeout.js';
 import { filterValidAiNutritionResults, getValidatedAiNutritionResult } from './aiNutritionValidation.js';
 
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
@@ -157,7 +173,7 @@ function handleOpenAIError(response, errorData) {
   return new Error(apiErrorMessage || `Помилка OpenAI API (код: ${response.status})`);
 }
 
-async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schema, maxOutputTokens = 1200, proxyUrl = '') {
+async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schema, maxOutputTokens = 1200, proxyUrl = '', options = {}) {
   const useProxy = Boolean(proxyUrl?.trim()) || apiKey === SERVER_OPENAI_API_KEY;
   const requestUrl = proxyUrl?.trim() || '/api/openai/responses';
   const trimmedApiKey = apiKey?.trim() || '';
@@ -176,14 +192,20 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
       headers.Authorization = `Bearer ${trimmedApiKey}`;
     }
 
-    response = await fetch(useProxy ? requestUrl : OPENAI_RESPONSES_URL, {
+    response = await fetchWithAbortTimeout(useProxy ? requestUrl : OPENAI_RESPONSES_URL, {
       method: 'POST',
       headers,
       body: JSON.stringify(buildResponseBody(modelName, input, schemaName, schema, maxOutputTokens))
+    }, {
+      timeoutMs: options.timeoutMs,
+      timeoutMessage: options.timeoutMessage
     });
   } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     console.error('OpenAI network error:', error);
-    throw new Error('Не вдалося підключитися до OpenAI API або proxy. Перевірте endpoint у налаштуваннях.');
+    throw new Error('\u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u043f\u0456\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u0438\u0441\u044f \u0434\u043e OpenAI API \u0430\u0431\u043e proxy. \u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 endpoint \u0443 \u043d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u043d\u043d\u044f\u0445.');
   }
 
   if (!response.ok) {
@@ -198,8 +220,14 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
     throw new Error('OpenAI не зміг згенерувати відповідь для цього запиту.');
   }
 
+  const parseStartedAt = getAiPerformanceNow();
   try {
-    return JSON.parse(textResponse);
+    const parsedResponse = JSON.parse(textResponse);
+    logAiPerformance('JSON parse', parseStartedAt, {
+      provider: 'openai',
+      schemaName
+    });
+    return parsedResponse;
   } catch (error) {
     console.error('OpenAI JSON parse error:', error, textResponse);
     throw new Error('Не вдалося розпарсити відповідь OpenAI. Спробуйте ще раз.');
@@ -207,7 +235,13 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
 }
 
 export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-4o', proxyUrl = '') {
-  const base64ImageBytes = await downscaleImageToBase64(base64Data);
+  const base64ImageBytes = await downscaleImageToBase64(base64Data, AI_FOOD_IMAGE_MAX_SIDE, AI_FOOD_IMAGE_JPEG_QUALITY);
+  logAiPayload('photo payload', {
+    provider: 'openai',
+    modelName,
+    payloadSizeKb: getBase64PayloadSizeKb(base64ImageBytes),
+    useProxy: Boolean(proxyUrl?.trim()) || apiKey === SERVER_OPENAI_API_KEY
+  });
   const promptText = `
     Проаналізуй фото їжі українською мовою.
 
@@ -219,6 +253,7 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
     - Поверни тільки дані, які відповідають JSON Schema.
   `;
 
+  const requestStartedAt = getAiPerformanceNow();
   const result = await requestOpenAIResponse(
     modelName,
     [
@@ -234,10 +269,19 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
     'food_scan_result',
     FOOD_SCAN_SCHEMA,
     1200,
-    proxyUrl
+    proxyUrl,
+    {
+      timeoutMs: AI_PHOTO_REQUEST_TIMEOUT_MS,
+      timeoutMessage: AI_PHOTO_REQUEST_TIMEOUT_MESSAGE
+    }
   );
+  logAiPerformance('provider request', requestStartedAt, {
+    provider: 'openai',
+    modelName
+  });
 
-  return getValidatedAiNutritionResult({
+  const validationStartedAt = getAiPerformanceNow();
+  const validatedResult = getValidatedAiNutritionResult({
     ...result,
     ingredients: result.ingredients || '',
     dataQuality: result.dataQuality || 'estimate',
@@ -249,6 +293,12 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
     confidenceMax: 100,
     defaultDataQuality: 'estimate'
   });
+  logAiPerformance('validation', validationStartedAt, {
+    provider: 'openai',
+    dataQuality: validatedResult.dataQuality,
+    needsManualNutrition: validatedResult.needsManualNutrition
+  });
+  return validatedResult;
 }
 
 export async function detectBarcodeFromImageWithOpenAI(base64Data, apiKey, modelName = 'gpt-4o', proxyUrl = '') {
