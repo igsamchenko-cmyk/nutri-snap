@@ -4,14 +4,20 @@ import {
   logAiPerformance
 } from './aiPerformance.js';
 
-export const AI_FOOD_IMAGE_MAX_SIDE = 1024;
-export const AI_FOOD_IMAGE_JPEG_QUALITY = 0.76;
+export const AI_DEFAULT_IMAGE_MAX_SIDE = 1280;
+export const AI_DEFAULT_IMAGE_JPEG_QUALITY = 0.82;
+export const AI_FOOD_IMAGE_MAX_SIDE = 896;
+export const AI_FOOD_IMAGE_JPEG_QUALITY = 0.72;
 
 /**
  * Downscales an image to maxSide on the longest edge and converts it to JPEG.
  * Returns raw base64 without the data: prefix.
  */
-export async function downscaleImageToBase64(base64OrDataUrl, maxSide = 1280, quality = 0.82) {
+export async function downscaleImageToBase64(
+  base64OrDataUrl,
+  maxSide = AI_DEFAULT_IMAGE_MAX_SIDE,
+  quality = AI_DEFAULT_IMAGE_JPEG_QUALITY
+) {
   const startedAt = getAiPerformanceNow();
   const originalSizeKb = getBase64PayloadSizeKb(base64OrDataUrl);
   const dataUrl = base64OrDataUrl.startsWith('data:')
