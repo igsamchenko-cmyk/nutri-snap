@@ -127,38 +127,25 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
   // Використовуємо обрану модель Gemini
 
   const promptText = `
-    Ти — експертний нутриціолог-аналітик. Проаналізуй це фото їжі максимально точно.
+    Analyze this food photo and return only JSON matching the schema. Return all text values in Ukrainian.
 
-    МЕТОДИКА АНАЛІЗУ (виконай подумки, перш ніж дати відповідь):
-    1. Визнач кожен видимий компонент страви окремо (білок, гарнір, овочі, соус, олія).
-    2. Оціни вагу КОЖНОГО компонента в грамах, спираючись на візуальні орієнтири: розмір тарілки (стандартна ~26 см), стандартні порції, висоту й об'єм їжі.
-    3. Для кожного компонента визнач КБЖВ за відомими значеннями на 100 г, потім перерахуй на оцінену вагу.
-    4. Підсумуй усі компоненти для фінального результату.
-    5. Врахуй спосіб приготування (смажене додає олію +5-15 г жиру; гриль/варене — ні).
+    Required task:
+    - identify the main dish/product and visible components;
+    - estimate total serving weight in grams;
+    - estimate calories/protein/fat/carbs for the whole serving;
+    - confidence must be 0-99; lower it when uncertain and explain in warning;
+    - dataQuality must be "estimate", "label_read", or "insufficient";
+    - needsManualNutrition must be true when nutrition cannot be estimated or read reliably.
 
-    ВАЖЛИВЕ ПРАВИЛО ТОЧНОСТІ:
-    - Якщо на фото звичайна готова страва без етикетки — дай НАЙКРАЩУ обґрунтовану оцінку ваги та КБЖВ (не занижуй через невпевненість).
-    - Якщо на фото упаковка/товар, але таблиця харчової цінності НЕ читається чітко, НЕ ВИГАДУЙ КБЖВ: поверни calories/protein/fat/carbs як null, confidence не більше 45, dataQuality: "insufficient", needsManualNutrition: true.
-    - Якщо на фото упаковка і таблиця харчової цінності чітко читається — зчитай КБЖВ саме з етикетки на 100 г і встанови dataQuality: "label_read".
-    - Не використовуй загальні знання бренду як точні дані для конкретної упаковки.
-    - Калорійність має бути арифметично узгоджена з макросами: калорії ≈ білки×4 + вуглеводи×4 + жири×9.
+    Rules:
+    - For normal prepared food, give the best approximate estimate; do not provide medical advice.
+    - Calories should roughly match macros: protein*4 + carbs*4 + fat*9.
+    - If this is packaging and the nutrition table is clearly readable, read values per 100 g and use dataQuality "label_read".
+    - If packaging/label is unclear, do not invent nutrition: calories/protein/fat/carbs null, confidence <=45, dataQuality "insufficient", needsManualNutrition true.
+    - Do not use generic brand knowledge as exact label data.
 
-    Ти ПОВИНЕН повернути відповідь виключно у форматі JSON українською мовою з наступними полями:
-    - "name": Назва страви або продукту (наприклад: "Куряче філе гриль з рисом та броколі")
-    - "calories": Калорійність у ккал для всієї порції (ціле число або null)
-    - "protein": Білки в грамах для всієї порції (число, округлене до 1 знака або null)
-    - "fat": Жири в грамах для всієї порції (число, округлене до 1 знака або null)
-    - "carbs": Вуглеводи в грамах для всієї порції (число, округлене до 1 знака або null)
-    - "weight": Сумарна оціночна вага порції в грамах (ціле число)
-    - "confidence": Твоя впевненість у розпізнаванні від 0 до 99 (ціле число)
-    - "ingredients": Основні компоненти з оціненою вагою (наприклад: "куряче філе ~150г, рис ~120г, броколі ~80г, олія ~5г")
-    - "dataQuality": "estimate" для оцінки страви, "label_read" для даних з етикетки, "insufficient" якщо КБЖВ не визначити
-    - "needsManualNutrition": true якщо треба вручну ввести КБЖВ з етикетки, інакше false
-    - "warning": коротке попередження або уточнення українською (наприклад "Оцінка приблизна — уточніть вагу для точності")
-
-    Формат відповіді — чистий JSON об'єкт, без markdown розмітки на кшталт \`\`\`json.
+    Required JSON fields: name, calories, protein, fat, carbs, weight, confidence, ingredients, dataQuality, needsManualNutrition, warning.
   `;
-
   const payload = {
     contents: [
       {
@@ -177,7 +164,7 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
       responseMimeType: "application/json",
       responseSchema: FOOD_SCAN_SCHEMA,
       temperature: 0.2,
-      maxOutputTokens: 2048
+      maxOutputTokens: 1200
     }, modelName)
   };
 

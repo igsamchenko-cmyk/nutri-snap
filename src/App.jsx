@@ -3685,9 +3685,9 @@ export default function App() {
                         <div className="loading-circle-outer"></div>
                         <span className="loading-icon-inner">🧬</span>
                       </div>
-                      <h3 style={{ fontFamily: 'var(--font-display)', fontWeight: 700 }}>NutriSnap AI аналізує страву...</h3>
+                      <h3 style={{ fontFamily: 'var(--font-display)', fontWeight: 700 }}>NutriSnap AI аналізує фото...</h3>
                       <p style={{ fontSize: '13px', color: '#94a3b8', width: '80%', textAlign: 'center' }}>
-                        Визначаємо інгредієнти, вагу та прораховуємо КБЖВ
+                        Зазвичай це 10-30 секунд. Якщо довше - спробуйте менше або чіткіше фото.
                       </p>
                     </div>
                   )}
