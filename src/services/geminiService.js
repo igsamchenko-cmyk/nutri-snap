@@ -1,5 +1,11 @@
 ﻿import { requestGeminiContent, SERVER_GEMINI_API_KEY } from './geminiClient.js';
 import {
+  GEMINI_ACCURATE_FOOD_SCAN_MODEL,
+  GEMINI_STABLE_FLASH_MODEL,
+  getFoodScanModelStrategy,
+  getLabelOcrModelStrategy
+} from './geminiModelStrategy.js';
+import {
   AI_FOOD_IMAGE_JPEG_QUALITY,
   AI_FOOD_IMAGE_MAX_SIDE,
   downscaleImageToBase64
@@ -109,10 +115,12 @@ function getGenerationConfig(baseConfig, modelName) {
 }
 
 
-export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2.5-flash') {
+export async function analyzeFoodImage(base64Data, apiKey, modelName = GEMINI_ACCURATE_FOOD_SCAN_MODEL) {
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
+
+  const modelStrategy = getFoodScanModelStrategy(modelName);
 
 
 
@@ -120,7 +128,9 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
   const base64ImageBytes = await downscaleImageToBase64(base64Data, AI_FOOD_IMAGE_MAX_SIDE, AI_FOOD_IMAGE_JPEG_QUALITY);
   logAiPayload('photo payload', {
     provider: 'gemini',
-    modelName,
+    modelName: modelStrategy.model,
+    requestedModelName: modelName,
+    scanMode: modelStrategy.mode,
     payloadSizeKb: getBase64PayloadSizeKb(base64ImageBytes)
   });
 
@@ -165,18 +175,21 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
       responseSchema: FOOD_SCAN_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
-    }, modelName)
+    }, modelStrategy.model)
   };
 
   try {
     const requestStartedAt = getAiPerformanceNow();
-    const data = await requestGeminiContent(modelName, payload, apiKey, {
+    const data = await requestGeminiContent(modelStrategy.model, payload, apiKey, {
       timeoutMs: AI_PHOTO_REQUEST_TIMEOUT_MS,
-      timeoutMessage: AI_PHOTO_REQUEST_TIMEOUT_MESSAGE
+      timeoutMessage: AI_PHOTO_REQUEST_TIMEOUT_MESSAGE,
+      fallbackModels: modelStrategy.fallbackModels
     });
     logAiPerformance('provider request', requestStartedAt, {
       provider: 'gemini',
-      modelName
+      modelName: modelStrategy.model,
+      requestedModelName: modelName,
+      scanMode: modelStrategy.mode
     });
 
     // Перевірка наявності відповіді
@@ -217,10 +230,12 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
 /**
  * Сервіс для розпізнавання штрих-коду з фотографії через Gemini API
  */
-export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'gemini-2.5-flash') {
+export async function detectBarcodeFromImage(base64Data, apiKey, modelName = GEMINI_STABLE_FLASH_MODEL) {
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
+
+  const modelStrategy = getLabelOcrModelStrategy(modelName);
 
   const base64ImageBytes = await downscaleImageToBase64(base64Data, 1600);
 
@@ -252,11 +267,13 @@ export async function detectBarcodeFromImage(base64Data, apiKey, modelName = 'ge
       responseSchema: BARCODE_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
-    }, modelName)
+    }, modelStrategy.model)
   };
 
   try {
-    const data = await requestGeminiContent(modelName, payload, apiKey);
+    const data = await requestGeminiContent(modelStrategy.model, payload, apiKey, {
+      fallbackModels: modelStrategy.fallbackModels
+    });
     const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResponse) {
       throw new Error("ШІ не зміг прочитати штрих-код з цього фото.");
@@ -327,10 +344,12 @@ export async function estimateFoodNutritionByName(foodName, apiKey, modelName = 
   }
 }
 
-export async function analyzeProductPackagingImage(base64Data, apiKey, modelName = 'gemini-2.5-flash') {
+export async function analyzeProductPackagingImage(base64Data, apiKey, modelName = GEMINI_STABLE_FLASH_MODEL) {
   if (!apiKey) {
     throw new Error("API-ключ не налаштовано. Будь ласка, введіть ваш Gemini API-ключ у налаштуваннях.");
   }
+  const modelStrategy = getLabelOcrModelStrategy(modelName);
+
   const base64ImageBytes = await downscaleImageToBase64(base64Data);
 
   const promptText = `
@@ -376,11 +395,13 @@ export async function analyzeProductPackagingImage(base64Data, apiKey, modelName
       responseSchema: PACKAGING_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 1200
-    }, modelName)
+    }, modelStrategy.model)
   };
 
   try {
-    const data = await requestGeminiContent(modelName, payload, apiKey);
+    const data = await requestGeminiContent(modelStrategy.model, payload, apiKey, {
+      fallbackModels: modelStrategy.fallbackModels
+    });
     const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResponse) {
       throw new Error("ШІ не зміг згенерувати відповідь для цього зображення.");
