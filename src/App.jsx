@@ -120,6 +120,12 @@ import {
   calculateBMR,
   getActivityMultiplier
 } from './utils';
+import {
+  getAiPerformanceNow,
+  getBase64PayloadSizeKb,
+  logAiPayload,
+  logAiPerformance
+} from './utils/aiPerformance';
 import useLocalStorageState from './hooks/useLocalStorageState';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
@@ -575,6 +581,7 @@ export default function App() {
   const [scannedCalories, setScannedCalories] = useState(0);
   const [cameraStream, setCameraStream] = useState(null);
   const [cameraRequested, setCameraRequested] = useState(false);
+  const aiScanInFlightRef = useRef(false);
 
   // Ghost click protection state
   const [allowCameraTrigger, setAllowCameraTrigger] = useState(false);
@@ -1097,7 +1104,19 @@ export default function App() {
   };
 
   const triggerScan = async (imageDataBase64) => {
+    if (aiScanInFlightRef.current) {
+      logAiPayload('duplicate scan ignored', { provider: scanMode });
+      return;
+    }
     if (!ensureAiPhotoNoticeAccepted()) return;
+
+    const scanStartedAt = getAiPerformanceNow();
+    let scanOutcome = 'unknown';
+    aiScanInFlightRef.current = true;
+    logAiPayload('photo scan started', {
+      provider: scanMode,
+      inputSizeKb: getBase64PayloadSizeKb(imageDataBase64)
+    });
     setIsScanning(true);
     setScanResult(null);
     setScannedMealCategory(preselectedCategory || getDefaultCategory());
@@ -1106,7 +1125,9 @@ export default function App() {
         throw new Error("Для фото-сканування оберіть GPT (OpenAI) або Gemini у налаштуваннях ШІ.");
       }
 
+      const providerStartedAt = getAiPerformanceNow();
       const result = await analyzeFoodWithCurrentProvider(imageDataBase64);
+      logAiPerformance('provider + validation', providerStartedAt, { provider: scanMode });
       const localNutritionMatch = findBestFoodMatchByName(result.name, [
         ...Object.values(customBarcodes).map(food => ({ ...food, isCustomBarcode: true })),
         ...normalizedCustomFoods.map(food => ({ ...food, isCustom: true })),
@@ -1139,6 +1160,7 @@ export default function App() {
           setCameraRequested(false);
           stopCamera();
           showToast(`Камера впізнала "${fallbackSearchName}", але КБЖВ ненадійні. Показую схожі продукти з бази.`, "info");
+          scanOutcome = 'fallback_search';
           return;
         }
         throw new Error(scanData.warning || "Не вдалося надійно визначити КБЖВ з фото. Щоб не показувати неправильні дані, введіть значення з етикетки вручну.");
@@ -1150,18 +1172,34 @@ export default function App() {
         warning: scanData.warning || "КБЖВ з фото є приблизною оцінкою. Перевірте дані перед додаванням."
       };
 
+      const confirmationStartedAt = getAiPerformanceNow();
       const confirmationDraft = createAiConfirmationDraft(verifiedResult);
+      logAiPerformance('confirmation draft creation', confirmationStartedAt, {
+        confidence: confirmationDraft.confidence,
+        dataQuality: confirmationDraft.dataQuality
+      });
       setScanResult(confirmationDraft);
       setEditedWeight(confirmationDraft.weight || 200);
       setScannedProtein(confirmationDraft.protein ?? 0);
       setScannedFat(confirmationDraft.fat ?? 0);
       setScannedCarbs(confirmationDraft.carbs ?? 0);
       setScannedCalories(confirmationDraft.calories ?? 0);
+      scanOutcome = 'confirmation';
+      logAiPerformance('confirmation state update', confirmationStartedAt, {
+        name: confirmationDraft.name,
+        weight: confirmationDraft.weight
+      });
     } catch (err) {
+      scanOutcome = 'error';
       console.error(err);
       openCustomFoodForm({ weight: 100 });
       showToast(err.message || "Помилка під час аналізу страви.", "error");
     } finally {
+      logAiPerformance('total', scanStartedAt, {
+        provider: scanMode,
+        result: scanOutcome
+      });
+      aiScanInFlightRef.current = false;
       setIsScanning(false);
     }
   };
@@ -1176,6 +1214,7 @@ export default function App() {
     if (!ensureAiPhotoNoticeAccepted()) return;
     if (!videoRef.current) return;
     
+    const captureStartedAt = getAiPerformanceNow();
     const video = videoRef.current;
     const sourceWidth = video.videoWidth || 640;
     const sourceHeight = video.videoHeight || 480;
@@ -1189,6 +1228,13 @@ export default function App() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
     const base64Data = canvas.toDataURL('image/jpeg', 0.75);
+    logAiPerformance('capture preprocessing', captureStartedAt, {
+      sourceWidth,
+      sourceHeight,
+      width: canvas.width,
+      height: canvas.height,
+      payloadSizeKb: getBase64PayloadSizeKb(base64Data)
+    });
     triggerScan(base64Data);
   };
 
@@ -1199,7 +1245,10 @@ export default function App() {
       reader.onload = (event) => {
         const img = new Image();
         img.onload = () => {
+          const filePreprocessingStartedAt = getAiPerformanceNow();
           const canvas = document.createElement('canvas');
+          const sourceWidth = img.width;
+          const sourceHeight = img.height;
           let width = img.width;
           let height = img.height;
           
@@ -1224,6 +1273,14 @@ export default function App() {
           
           // Якість 75% — достатньо чітко для сканування страви
           const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+          logAiPerformance('file preprocessing', filePreprocessingStartedAt, {
+            originalFileSizeKb: Math.round((file?.size || 0) / 1024),
+            sourceWidth,
+            sourceHeight,
+            width: canvas.width,
+            height: canvas.height,
+            payloadSizeKb: getBase64PayloadSizeKb(dataUrl)
+          });
           resolve(dataUrl);
         };
         img.onerror = (err) => reject(err);

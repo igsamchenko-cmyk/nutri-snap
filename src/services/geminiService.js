@@ -1,5 +1,19 @@
 ﻿import { requestGeminiContent, SERVER_GEMINI_API_KEY } from './geminiClient.js';
-import { downscaleImageToBase64 } from '../utils/imageUtils.js';
+import {
+  AI_FOOD_IMAGE_JPEG_QUALITY,
+  AI_FOOD_IMAGE_MAX_SIDE,
+  downscaleImageToBase64
+} from '../utils/imageUtils.js';
+import {
+  getAiPerformanceNow,
+  getBase64PayloadSizeKb,
+  logAiPayload,
+  logAiPerformance
+} from '../utils/aiPerformance.js';
+import {
+  AI_PHOTO_REQUEST_TIMEOUT_MESSAGE,
+  AI_PHOTO_REQUEST_TIMEOUT_MS
+} from '../utils/requestTimeout.js';
 import { filterValidAiNutritionResults, getValidatedAiNutritionResult } from './aiNutritionValidation.js';
 
 export { SERVER_GEMINI_API_KEY };
@@ -103,7 +117,12 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
 
 
   // Очищення base64 префіксу (наприклад, data:image/jpeg;base64,) якщо він є
-  const base64ImageBytes = await downscaleImageToBase64(base64Data);
+  const base64ImageBytes = await downscaleImageToBase64(base64Data, AI_FOOD_IMAGE_MAX_SIDE, AI_FOOD_IMAGE_JPEG_QUALITY);
+  logAiPayload('photo payload', {
+    provider: 'gemini',
+    modelName,
+    payloadSizeKb: getBase64PayloadSizeKb(base64ImageBytes)
+  });
 
   // Використовуємо обрану модель Gemini
 
@@ -163,17 +182,25 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
   };
 
   try {
-    const data = await requestGeminiContent(modelName, payload, apiKey);
-    
+    const requestStartedAt = getAiPerformanceNow();
+    const data = await requestGeminiContent(modelName, payload, apiKey, {
+      timeoutMs: AI_PHOTO_REQUEST_TIMEOUT_MS,
+      timeoutMessage: AI_PHOTO_REQUEST_TIMEOUT_MESSAGE
+    });
+    logAiPerformance('provider request', requestStartedAt, {
+      provider: 'gemini',
+      modelName
+    });
+
     // Перевірка наявності відповіді
     const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResponse) {
       throw new Error("ШІ не зміг згенерувати відповідь для цього зображення.");
     }
 
-    // Парсимо JSON
+    const validationStartedAt = getAiPerformanceNow();
     const parsedData = JSON.parse(textResponse);
-    return getValidatedAiNutritionResult({
+    const validatedResult = getValidatedAiNutritionResult({
       ...parsedData,
       dataQuality: parsedData.dataQuality || "estimate",
       needsManualNutrition: Boolean(parsedData.needsManualNutrition),
@@ -184,6 +211,12 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
       confidenceMax: 99,
       defaultDataQuality: "estimate"
     });
+    logAiPerformance('JSON parse / validation', validationStartedAt, {
+      provider: 'gemini',
+      dataQuality: validatedResult.dataQuality,
+      needsManualNutrition: validatedResult.needsManualNutrition
+    });
+    return validatedResult;
 
   } catch (error) {
     console.error("Error in analyzeFoodImage:", error);
