@@ -93,7 +93,10 @@ export async function requestGeminiContent(modelName, payload, apiKey, options =
   const timeout = createRequestTimeout(options.timeoutMs, options.timeoutMessage);
 
   try {
-    const chain = [modelName, ...GEMINI_MODEL_FALLBACK_CHAIN.filter(m => m !== modelName)];
+    const fallbackModels = Array.isArray(options.fallbackModels)
+      ? options.fallbackModels
+      : GEMINI_MODEL_FALLBACK_CHAIN;
+    const chain = [modelName, ...fallbackModels.filter(m => m !== modelName)];
     let lastError = null;
 
     for (const model of chain) {
