@@ -338,6 +338,24 @@ export default function App() {
   const [selectedSearchFood, setSelectedSearchFood] = useState(null);
   const [searchFoodWeight, setSearchFoodWeight] = useState(100);
   const [searchMealCategory, setSearchMealCategory] = useState('Сніданок');
+
+  // --- Aurora Glass: meal-detail bottom sheet ---
+  // detailItem holds whichever meal/food object is being inspected (a logged meal from
+  // Dashboard/Diary, or an unsaved "quick pick" demo food from the Scanner). `portion`
+  // is a display-only multiplier (never mutates the stored item until Save is pressed).
+  const [detailItem, setDetailItem] = useState(null);
+  const [portion, setPortion] = useState(1);
+
+  const openMealDetail = (item, isLogged) => {
+    if (!item) return;
+    setDetailItem({ ...item, __isLoggedMeal: !!isLogged });
+    setPortion(1);
+  };
+
+  const closeMealDetail = () => {
+    setDetailItem(null);
+    setPortion(1);
+  };
   const [externalSearchFoods, setExternalSearchFoods] = useState([]);
   const [aiSearchFoods, setAiSearchFoods] = useState([]);
   const [isSearchingExternal, setIsSearchingExternal] = useState(false);
@@ -2038,25 +2056,29 @@ export default function App() {
   };
 
   // --- Manual Search Helper Functions ---
-  const addSearchMealToDiary = () => {
-    if (!selectedSearchFood) return;
+  // foodOverride/weightOverride/categoryOverride let other flows (e.g. the meal-detail
+  // bottom sheet's "quick pick" save action) reuse this exact add-to-log logic without
+  // going through the `selectedSearchFood` search-panel state.
+  const addSearchMealToDiary = (foodOverride, weightOverride, categoryOverride) => {
+    const food = foodOverride || selectedSearchFood;
+    if (!food) return;
 
-    const category = searchMealCategory;
-    const baselineWeight = Number(selectedSearchFood.weight) || 100;
-    const finalWeight = Number(searchFoodWeight) || baselineWeight;
+    const category = categoryOverride || searchMealCategory;
+    const baselineWeight = Number(food.weight) || 100;
+    const finalWeight = Number(weightOverride ?? searchFoodWeight) || baselineWeight;
     const scaleTo100 = 100 / baselineWeight;
-    const isOffProduct = selectedSearchFood.source === 'openfoodfacts';
-    const isCustomProduct = selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode;
+    const isOffProduct = food.source === 'openfoodfacts';
+    const isCustomProduct = food.isCustom || food.isCustomBarcode;
     const foodSource = isOffProduct
       ? 'barcode_off'
-      : selectedSearchFood.isAiSearch || selectedSearchFood.source === 'ai-search'
+      : food.isAiSearch || food.source === 'ai-search'
         ? 'ai_estimate'
-        : selectedSearchFood.source || 'manual';
+        : food.source || 'manual';
     const per100g = roundNutritionValues({
-      calories: (Number(selectedSearchFood.calories) || 0) * (isOffProduct ? 1 : scaleTo100),
-      protein: (Number(selectedSearchFood.protein) || 0) * (isOffProduct ? 1 : scaleTo100),
-      fat: (Number(selectedSearchFood.fat) || 0) * (isOffProduct ? 1 : scaleTo100),
-      carbs: (Number(selectedSearchFood.carbs) || 0) * (isOffProduct ? 1 : scaleTo100)
+      calories: (Number(food.calories) || 0) * (isOffProduct ? 1 : scaleTo100),
+      protein: (Number(food.protein) || 0) * (isOffProduct ? 1 : scaleTo100),
+      fat: (Number(food.fat) || 0) * (isOffProduct ? 1 : scaleTo100),
+      carbs: (Number(food.carbs) || 0) * (isOffProduct ? 1 : scaleTo100)
     });
     const scaledNutrition = scaleNutritionPer100g(per100g, finalWeight) || { calories: 0, protein: 0, fat: 0, carbs: 0 };
     const createMealEntry = isOffProduct
@@ -2066,9 +2088,9 @@ export default function App() {
         : createManualMealEntry;
 
     const newMeal = createMealEntry({
-      ...selectedSearchFood,
+      ...food,
       source: foodSource,
-      dataQuality: selectedSearchFood.dataQuality || (foodSource === 'manual' ? 'manual' : 'unknown'),
+      dataQuality: food.dataQuality || (foodSource === 'manual' ? 'manual' : 'unknown'),
       per100g,
       defaultPortionGrams: finalWeight
     }, finalWeight, {
@@ -2076,16 +2098,16 @@ export default function App() {
       date: selectedDate,
       category,
       mealType: category,
-      icon: selectedSearchFood.icon || getEmojiForCategory(category),
+      icon: food.icon || getEmojiForCategory(category),
       source: foodSource,
-      confidence: selectedSearchFood.confidence,
-      warning: selectedSearchFood.warning,
+      confidence: food.confidence,
+      warning: food.warning,
       totals: scaledNutrition,
       original: {
-        calories: Number(selectedSearchFood.calories),
-        protein: Number(selectedSearchFood.protein),
-        fat: Number(selectedSearchFood.fat),
-        carbs: Number(selectedSearchFood.carbs),
+        calories: Number(food.calories),
+        protein: Number(food.protein),
+        fat: Number(food.fat),
+        carbs: Number(food.carbs),
         weight: baselineWeight
       }
     });
@@ -2095,29 +2117,31 @@ export default function App() {
     const finalFat = newMeal.fat;
     const finalCarbs = newMeal.carbs;
 
-    rememberFoodPortion(selectedSearchFood, finalWeight);
+    rememberFoodPortion(food, finalWeight);
     if (
-      !selectedSearchFood.isCustom &&
-      !selectedSearchFood.isCustomBarcode &&
-      !selectedSearchFood.isLearned &&
-      (selectedSearchFood.isAiSearch || selectedSearchFood.source === 'openfoodfacts')
+      !food.isCustom &&
+      !food.isCustomBarcode &&
+      !food.isLearned &&
+      (food.isAiSearch || food.source === 'openfoodfacts')
     ) {
       rememberConfirmedProduct({
-        ...selectedSearchFood,
+        ...food,
         calories: finalCalories,
         protein: finalProtein,
         fat: finalFat,
         carbs: finalCarbs,
         weight: finalWeight
-      }, selectedSearchFood.source === 'openfoodfacts' ? 'barcode' : 'ai-search');
+      }, food.source === 'openfoodfacts' ? 'barcode' : 'ai-search');
     }
     setMeals(prev => [newMeal, ...prev]);
     setPreselectedCategory(null);
-    showToast(`"${selectedSearchFood.name}" додано до щоденника!`, "success");
-    
-    setSelectedSearchFood(null);
-    setSearchQuery('');
-    changeTab(previousTab || 'dashboard');
+    showToast(`"${food.name}" додано до щоденника!`, "success");
+
+    if (!foodOverride) {
+      setSelectedSearchFood(null);
+      setSearchQuery('');
+      changeTab(previousTab || 'dashboard');
+    }
   };
 
   const triggerAISmartSearch = async (queryToSearch) => {
@@ -2467,6 +2491,25 @@ export default function App() {
       }
       return meal;
     }));
+  };
+
+  // Застосувати обраний множник порції у сторінці деталей страви та зберегти:
+  // — для вже залогованої страви (Dashboard/Diary) масштабує її вагу через
+  //   вже наявний handleUpdateMealWeight;
+  // — для ще не залогованого "quick pick" продукту (Scanner) додає новий запис
+  //   через вже наявний addSearchMealToDiary.
+  const handleSaveMealDetailPortion = () => {
+    if (!detailItem) return;
+    const baseWeight = Number(detailItem.weight) || 100;
+    const newWeight = Math.round(baseWeight * portion) || baseWeight;
+
+    if (detailItem.__isLoggedMeal && detailItem.id) {
+      handleUpdateMealWeight(detailItem.id, newWeight);
+      showToast(`Порцію "${detailItem.name}" оновлено!`, "success");
+    } else {
+      addSearchMealToDiary(detailItem, newWeight, preselectedCategory || searchMealCategory || 'Сніданок');
+    }
+    closeMealDetail();
   };
 
   // --- Calculations for Current Day ---
@@ -3376,10 +3419,20 @@ export default function App() {
                         <div className="category-meals-list">
                           {catMeals.map(meal => (
                             <div key={meal.id} className="timeline-item">
-                              <div className="meal-info">
+                              <div
+                                className="meal-info"
+                                onClick={() => openMealDetail(meal, true)}
+                                style={{ cursor: 'pointer' }}
+                                title="Переглянути деталі страви"
+                              >
+                                <div className="meal-emoji">{meal.icon || getEmojiForCategory(meal.category || meal.mealType)}</div>
                                 <div className="meal-text">
                                   <span className="meal-name" style={{ fontSize: '14px', fontWeight: 600 }}>{meal.name}</span>
-                                  <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}>
+                                  <span
+                                    className="meal-meta"
+                                    style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
                                     <input 
                                       type="number"
                                       value={meal.weight}
@@ -4385,6 +4438,39 @@ export default function App() {
                   })()}
                 </div>
 
+                {/* Quick pick — швидкий вибір демо-страв, відкриває картку деталей */}
+                {!searchQuery.trim() && (
+                  <div style={{ marginBottom: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px 8px' }}>
+                      <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-dark-secondary)' }}>Швидкий вибір</span>
+                    </div>
+                    <div className="demo-food-tray" style={{ padding: '0 16px 16px' }}>
+                      {mockFoods.slice(0, 10).map(food => (
+                        <div
+                          key={food.id}
+                          className="demo-food-card"
+                          onClick={() => openMealDetail(food, false)}
+                          style={{
+                            flex: '0 0 128px',
+                            height: '100px',
+                            background: 'linear-gradient(160deg, rgba(16, 185, 129, 0.18), rgba(99, 102, 241, 0.14))'
+                          }}
+                          title={`Переглянути "${food.name}"`}
+                        >
+                          <div className="demo-food-card-icon">{food.icon || '🍽️'}</div>
+                          <div className="demo-food-card-content">
+                            <p className="demo-food-card-title">{food.name}</p>
+                            <div className="demo-food-card-nutrients">
+                              <span className="demo-food-kcal">{food.calories} ккал</span>
+                              <span className="demo-food-macros">{food.weight}г</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* AI Smart Search Button */}
                 {searchQuery.trim().length >= 2 && (
                   <div style={{ padding: '0 16px 12px' }}>
@@ -5231,10 +5317,20 @@ export default function App() {
                         <div className="category-meals-list">
                           {catMeals.map(meal => (
                             <div key={meal.id} className="timeline-item">
-                              <div className="meal-info">
+                              <div
+                                className="meal-info"
+                                onClick={() => openMealDetail(meal, true)}
+                                style={{ cursor: 'pointer' }}
+                                title="Переглянути деталі страви"
+                              >
+                                <div className="meal-emoji">{meal.icon || getEmojiForCategory(meal.category || meal.mealType)}</div>
                                 <div className="meal-text">
                                   <span className="meal-name" style={{ fontSize: '14px', fontWeight: 600 }}>{meal.name}</span>
-                                  <span className="meal-meta" style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}>
+                                  <span
+                                    className="meal-meta"
+                                    style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
                                     <input 
                                       type="number"
                                       value={meal.weight}
@@ -5339,7 +5435,37 @@ export default function App() {
         {activeTab === 'profile' && (
           <div>
             <h2 className="section-title">Профіль користувача</h2>
-            
+
+            {/* Profile Avatar Header */}
+            <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div
+                style={{
+                  width: '76px',
+                  height: '76px',
+                  flexShrink: 0,
+                  borderRadius: '50%',
+                  background: 'linear-gradient(135deg, var(--color-calories) 0%, var(--color-accent) 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '30px',
+                  fontWeight: 800,
+                  fontFamily: 'var(--font-display)',
+                  color: '#fff'
+                }}
+              >
+                {(profile.goal === 'lose' ? 'С' : profile.goal === 'gain' ? 'Н' : 'П')}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '17px', fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1.2 }}>
+                  {profile.goal === 'lose' ? 'Схуднення' : profile.goal === 'gain' ? 'Набір маси' : 'Підтримка ваги'}
+                </div>
+                <div style={{ fontSize: '13px', color: theme === 'light' ? 'var(--text-light-secondary)' : 'var(--text-dark-secondary)', marginTop: '4px' }}>
+                  {profile.weight ? `${profile.weight} кг` : '—'} · Ціль: {profile.targetCalories} ккал/день
+                </div>
+              </div>
+            </div>
+
             {/* Profile Calculations Card */}
             <div className="glass-card">
               <h3 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -5593,7 +5719,13 @@ export default function App() {
                       <div className="analytics-bar-val">{day.calories > 0 ? day.calories : ''}</div>
                       <div className="analytics-bar-track">
                         <div className="analytics-goal-line" style={{ bottom: `${Math.min((profile.targetCalories / maxVal) * 100, 100)}%` }} />
-                        <div className={`analytics-bar-fill ${isOver ? 'over-goal' : ''}`} style={{ height: `${barHeight}%` }} />
+                        <div
+                          className={`analytics-bar-fill ${isOver ? 'over-goal' : ''}`}
+                          style={{
+                            height: `${barHeight}%`,
+                            background: isOver ? undefined : (day.isToday ? 'var(--color-calories)' : 'rgba(99, 102, 241, 0.55)')
+                          }}
+                        />
                       </div>
                       <div className="analytics-bar-label">{day.label}</div>
                       <div className="analytics-bar-day">{day.dayNum}</div>
@@ -5606,6 +5738,55 @@ export default function App() {
                 <span className="legend-item"><span className="legend-line"></span>Ціль</span>
                 <span className="legend-item"><span className="legend-dot" style={{ background: '#f87171' }}></span>Перевищення</span>
               </div>
+            </div>
+
+            <div className="glass-card" style={{ marginTop: '12px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '14px' }}>Розподіл БЖВ за тиждень</h3>
+              {(() => {
+                const weekProtein = weeklyAnalytics.reduce((sum, d) => sum + (Number(d.protein) || 0), 0);
+                const weekFat = weeklyAnalytics.reduce((sum, d) => sum + (Number(d.fat) || 0), 0);
+                const weekCarbs = weeklyAnalytics.reduce((sum, d) => sum + (Number(d.carbs) || 0), 0);
+
+                const kcalProtein = weekProtein * 4;
+                const kcalFat = weekFat * 9;
+                const kcalCarbs = weekCarbs * 4;
+                const kcalTotal = kcalProtein + kcalFat + kcalCarbs;
+
+                const pctProtein = kcalTotal > 0 ? (kcalProtein / kcalTotal) * 100 : 0;
+                const pctFat = kcalTotal > 0 ? (kcalFat / kcalTotal) * 100 : 0;
+                const pctCarbs = kcalTotal > 0 ? 100 - pctProtein - pctFat : 0;
+
+                const degProtein = pctProtein * 3.6;
+                const degFat = degProtein + pctFat * 3.6;
+
+                const donutBackground = kcalTotal > 0
+                  ? `conic-gradient(var(--color-protein) 0deg ${degProtein}deg, var(--color-fat) ${degProtein}deg ${degFat}deg, var(--color-carbs) ${degFat}deg 360deg)`
+                  : 'rgba(255, 255, 255, 0.06)';
+
+                return (
+                  <div className="macro-donut-wrap">
+                    <div className="macro-donut-outer" style={{ background: donutBackground }}>
+                      <div className="macro-donut-center">БЖВ</div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="analytics-legend" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px', marginTop: 0 }}>
+                        <span className="legend-item" style={{ fontSize: '12px' }}>
+                          <span className="legend-dot" style={{ background: 'var(--color-protein)' }}></span>
+                          Б — білки: {Math.round(weekProtein)}г ({Math.round(pctProtein)}%)
+                        </span>
+                        <span className="legend-item" style={{ fontSize: '12px' }}>
+                          <span className="legend-dot" style={{ background: 'var(--color-fat)' }}></span>
+                          Ж — жири: {Math.round(weekFat)}г ({Math.round(pctFat)}%)
+                        </span>
+                        <span className="legend-item" style={{ fontSize: '12px' }}>
+                          <span className="legend-dot" style={{ background: 'var(--color-carbs)' }}></span>
+                          В — вуглеводи: {Math.round(weekCarbs)}г ({Math.round(pctCarbs)}%)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="glass-card" style={{ marginTop: '12px' }}>
@@ -5920,6 +6101,15 @@ export default function App() {
                   />
                 </label>
               </div>
+
+              <button
+                className="btn-primary"
+                onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+                style={{ marginTop: '12px', background: 'var(--input-bg)', border: '1px solid var(--input-border)', color: 'inherit', boxShadow: 'none' }}
+              >
+                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+                <span>{theme === 'dark' ? 'Світла тема' : 'Темна тема'}</span>
+              </button>
             </div>
 
             {/* AI Scanner Configuration Card */}
@@ -6381,6 +6571,83 @@ export default function App() {
           </button>
         </nav>
       )}
+
+      {/* --- Aurora Glass: meal-detail bottom sheet --- */}
+      {detailItem && (() => {
+        const baseWeight = Number(detailItem.weight) || 100;
+        const baseCalories = Number(detailItem.calories) || 0;
+        const baseProtein = Number(detailItem.protein) || 0;
+        const baseFat = Number(detailItem.fat) || 0;
+        const baseCarbs = Number(detailItem.carbs) || 0;
+
+        const dispCalories = Math.round(baseCalories * portion);
+        const dispProtein = Math.round(baseProtein * portion * 10) / 10;
+        const dispFat = Math.round(baseFat * portion * 10) / 10;
+        const dispCarbs = Math.round(baseCarbs * portion * 10) / 10;
+        const dispWeight = Math.round(baseWeight * portion);
+
+        const portionOptions = [
+          { value: 0.5, label: '½ порції' },
+          { value: 1, label: '1 порція' },
+          { value: 1.5, label: '1½ порції' },
+          { value: 2, label: '2 порції' }
+        ];
+
+        return (
+          <div className="meal-detail-backdrop" onClick={closeMealDetail}>
+            <div className="meal-detail-sheet" onClick={(e) => e.stopPropagation()}>
+              <div className="meal-detail-header">
+                <div className="meal-detail-header-info">
+                  <div className="meal-detail-emoji">{detailItem.icon || '🍽️'}</div>
+                  <h3 className="meal-detail-title">{detailItem.name}</h3>
+                </div>
+                <button className="meal-detail-close-btn" onClick={closeMealDetail} aria-label="Закрити" title="Закрити">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="quick-portion-row" style={{ margin: '0 0 4px', padding: 0 }}>
+                {portionOptions.map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className={`quick-portion-chip ${portion === opt.value ? 'active' : ''}`}
+                    onClick={() => setPortion(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="sheet-kcal-card">
+                <span className="sheet-kcal-val">{dispCalories}</span>
+                <span className="sheet-kcal-label">ккал · {dispWeight} г</span>
+              </div>
+
+              <div className="sheet-macro-grid">
+                <div className="sheet-macro-cell">
+                  <span className="sheet-macro-val" style={{ color: 'var(--color-protein)' }}>{dispProtein}г</span>
+                  <span className="sheet-macro-label">Білки</span>
+                </div>
+                <div className="sheet-macro-cell">
+                  <span className="sheet-macro-val" style={{ color: 'var(--color-fat)' }}>{dispFat}г</span>
+                  <span className="sheet-macro-label">Жири</span>
+                </div>
+                <div className="sheet-macro-cell">
+                  <span className="sheet-macro-val" style={{ color: 'var(--color-carbs)' }}>{dispCarbs}г</span>
+                  <span className="sheet-macro-label">Вуглеводи</span>
+                </div>
+              </div>
+
+              <button className="btn-save-portion" onClick={handleSaveMealDetailPortion}>
+                <Check size={18} />
+                Зберегти в щоденник
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Модальне вікно для створення продукту вручну */}
       {isCustomFoodModalOpen && (
         <div className="modal-backdrop" onClick={closeCustomFoodModal}>
