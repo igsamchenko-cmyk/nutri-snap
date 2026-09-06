@@ -4442,8 +4442,8 @@ export default function App() {
                               selectSearchFood(food);
                             }}
                           >
-                            <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🥗'}</span>
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
+                            <span className="search-food-icon" style={{ fontSize: '24px' }}>{food.icon || '🥗'}</span>
+                            <div className="search-food-content" style={{ display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
                               <span
                                 style={{
                                   fontWeight: 600,
@@ -4458,30 +4458,32 @@ export default function App() {
                                 {shouldShowBrandPrefix(food, !!food.supermarket) ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
                               </span>
                             </div>
-                            {(food.isCustom || food.isCustomBarcode) && (
-                              <button
-                                type="button"
-                                className="search-edit-btn"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openCustomFoodEditor(food);
-                                }}
-                                title="Редагувати КБЖВ"
-                                aria-label="Редагувати КБЖВ"
-                              >
-                                <Pencil size={15} />
-                              </button>
-                            )}
-                            {getFoodUsageCount(food) > 0 && (
-                              <span className="search-brand-badge search-usage-badge">
-                                {getFoodUsageCount(food)}x
-                              </span>
-                            )}
-                            {food.supermarket ? (
-                              <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket}</span>
-                            ) : food.brand ? (
-                              <span className="search-brand-badge">{food.brand}</span>
-                            ) : null}
+                            <div className="search-food-actions">
+                              {(food.isCustom || food.isCustomBarcode) && (
+                                <button
+                                  type="button"
+                                  className="search-edit-btn"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    openCustomFoodEditor(food);
+                                  }}
+                                  title="Редагувати КБЖВ"
+                                  aria-label="Редагувати КБЖВ"
+                                >
+                                  <Pencil size={15} />
+                                </button>
+                              )}
+                              {getFoodUsageCount(food) > 0 && (
+                                <span className="search-brand-badge search-usage-badge">
+                                  {getFoodUsageCount(food)}x
+                                </span>
+                              )}
+                              {food.supermarket ? (
+                                <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket}</span>
+                              ) : food.brand ? (
+                                <span className="search-brand-badge">{food.brand}</span>
+                              ) : null}
+                            </div>
                           </div>
                         );
                       })}
@@ -4507,8 +4509,8 @@ export default function App() {
                               });
                             }}
                           >
-                            <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🔮'}</span>
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
+                            <span className="search-food-icon" style={{ fontSize: '24px' }}>{food.icon || '🔮'}</span>
+                            <div className="search-food-content" style={{ display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
                               <span style={{ fontWeight: 600, fontSize: '14px', color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' }}>
                                 {food.name}
                               </span>
@@ -4516,7 +4518,9 @@ export default function App() {
                                 {shouldShowBrandPrefix(food, true) ? `${food.brand} • ` : ''}ШІ-підказка назви, КБЖВ внесіть вручну
                               </span>
                             </div>
-                            <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket || "ШІ"}</span>
+                            <div className="search-food-actions">
+                              <span className={`search-brand-badge ${badgeClass}`}>{food.supermarket || "ШІ"}</span>
+                            </div>
                           </div>
                         );
                       })}
@@ -4541,8 +4545,8 @@ export default function App() {
                             setIsCustomFoodModalOpen(true);
                           }}
                         >
-                          <span style={{ fontSize: '24px', marginRight: '8px' }}>🛒</span>
-                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
+                          <span className="search-food-icon" style={{ fontSize: '24px' }}>🛒</span>
+                          <div className="search-food-content" style={{ display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
                             <span style={{ fontWeight: 600, fontSize: '14px', color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' }}>
                               {food.name}
                             </span>
@@ -4550,7 +4554,9 @@ export default function App() {
                               {shouldShowBrandPrefix(food, true) ? `${food.brand} • ` : ''}Зовнішня база: КБЖВ підтвердіть з етикетки
                             </span>
                           </div>
-                          <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>{food.sourceLabel || "База OFF"}</span>
+                          <div className="search-food-actions">
+                            <span className="search-brand-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>{food.sourceLabel || "База OFF"}</span>
+                          </div>
                         </div>
                       ))}
                     </>
