@@ -146,6 +146,8 @@ function normalizeProduct(product) {
   const protein = roundMacro(nutriments.proteins_100g ?? nutriments.proteins);
   const fat = roundMacro(nutriments.fat_100g ?? nutriments.fat);
   const carbs = roundMacro(nutriments.carbohydrates_100g ?? nutriments.carbohydrates);
+  const per100g = { calories, protein, fat, carbs };
+  const packageWeight = parseQuantityToGrams(product.quantity);
   const supermarket = detectSupermarket(product);
   const fullName = brand ? `${brand} - ${name}` : name;
   const barcode = cleanText(product.code || "");
@@ -162,7 +164,10 @@ function normalizeProduct(product) {
     protein,
     fat,
     carbs,
-    weight: parseQuantityToGrams(product.quantity),
+    per100g,
+    nutritionBasis: "100g",
+    packageWeight,
+    weight: packageWeight,
     icon: supermarket ? "🛒" : "🥗",
     image: product.image_front_url || product.image_url || null,
     ingredients: ingredients ? cleanText(ingredients) : null,

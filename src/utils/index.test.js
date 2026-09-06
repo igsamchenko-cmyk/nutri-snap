@@ -61,7 +61,7 @@ describe('General Utilities', () => {
     });
 
     it('should normalize imported products scaling macros to 100g base weight', () => {
-      const row = { 'назва': 'Горіхи', 'вага': '50', 'калорії': '300', 'білки': '10' };
+      const row = { 'назва': 'Горіхи', 'вага': '50', 'калорії': '300', 'білки': '10', 'жири': '25', 'вуглеводи': '15' };
       const normalized = normalizeImportedProduct(row, 0);
       expect(normalized).not.toBeNull();
       expect(normalized.name).toBe('Горіхи');
@@ -69,6 +69,12 @@ describe('General Utilities', () => {
       expect(normalized.calories).toBe(600);
       expect(normalized.protein).toBe(20);
       expect(normalized.weight).toBe(100);
+      expect(normalized.per100g).toEqual({ calories: 600, protein: 20, fat: 50, carbs: 30 });
+    });
+
+    it('rejects incomplete nutrition instead of converting missing fields to zero', () => {
+      const row = { 'назва': 'Неповний продукт', 'калорії': '120', 'білки': '5' };
+      expect(normalizeImportedProduct(row, 0)).toBeNull();
     });
   });
 

@@ -538,11 +538,18 @@ export default function App() {
           fat: Number(barcodeScannedFat) || 0,
           carbs: Number(barcodeScannedCarbs) || 0
         };
+        const favoritePer100g = roundNutritionValues({
+          calories: favoriteTotals.calories * (100 / favoriteWeight),
+          protein: favoriteTotals.protein * (100 / favoriteWeight),
+          fat: favoriteTotals.fat * (100 / favoriteWeight),
+          carbs: favoriteTotals.carbs * (100 / favoriteWeight)
+        });
         const favoriteSource = (barcodeResult.isCustom || barcodeResult.isCustomBarcode) ? 'custom' : 'barcode_off';
         return [...prev, createFavoriteFromMealEntry({
           ...barcodeResult,
           name,
           ...favoriteTotals,
+          per100g: favoritePer100g,
           totals: favoriteTotals,
           weight: favoriteWeight,
           servingGrams: favoriteWeight,
@@ -1510,30 +1517,28 @@ export default function App() {
   };
 
   const setVerifiedBarcodeProduct = (product, barcodeVal = "") => {
-    if (product?.source === "openfoodfacts") {
-      prepareManualBarcodeEntry(
-        barcodeVal,
-        product,
-        "Зовнішня база знайшла товар, але її КБЖВ не використовуються автоматично. Введіть значення з етикетки."
-      );
-      return false;
-    }
-
     if (!hasCompleteNutritionValues(product)) {
       throw new Error("У знайденого продукту немає повного набору КБЖВ. Щоб не показувати неправильні дані, внесіть значення з етикетки вручну.");
     }
 
+    const verifiedProduct = product.source === "openfoodfacts"
+      ? {
+          ...product,
+          warning: product.warning || "Дані взято з Open Food Facts. Перед додаванням звірте їх з етикеткою."
+        }
+      : product;
     setBarcodeCandidateProduct(null);
     setBarcodeNotFound(null);
-    setBarcodeResult(product);
-    const w = getPreferredFoodWeight(product, product.weight || 100);
+    setBarcodeResult(verifiedProduct);
+    const w = getPreferredFoodWeight(verifiedProduct, verifiedProduct.weight || 100);
     setBarcodeEditedWeight(w);
-    const scaledNutrition = scaleNutritionPer100g({
-      calories: Number(product.calories) || 0,
-      protein: Number(product.protein) || 0,
-      fat: Number(product.fat) || 0,
-      carbs: Number(product.carbs) || 0
-    }, w) || { calories: 0, protein: 0, fat: 0, carbs: 0 };
+    const productPer100g = roundNutritionValues(verifiedProduct.per100g) || roundNutritionValues({
+      calories: Number(verifiedProduct.calories) || 0,
+      protein: Number(verifiedProduct.protein) || 0,
+      fat: Number(verifiedProduct.fat) || 0,
+      carbs: Number(verifiedProduct.carbs) || 0
+    });
+    const scaledNutrition = scaleNutritionPer100g(productPer100g, w) || { calories: 0, protein: 0, fat: 0, carbs: 0 };
     setBarcodeScannedProtein(scaledNutrition.protein);
     setBarcodeScannedFat(scaledNutrition.fat);
     setBarcodeScannedCarbs(scaledNutrition.carbs);
@@ -1983,17 +1988,17 @@ export default function App() {
     
     const currentWeightVal = Number(value) || 0;
     const scaledNutrition = scaleNutritionPer100g({
-      calories: 0,
+      calories: Number(barcodeResult.calories) || 0,
       protein: Number(barcodeResult.protein) || 0,
       fat: Number(barcodeResult.fat) || 0,
       carbs: Number(barcodeResult.carbs) || 0
-    }, currentWeightVal) || { protein: 0, fat: 0, carbs: 0 };
-    const { protein: p, fat: f, carbs: c } = scaledNutrition;
+    }, currentWeightVal) || { calories: 0, protein: 0, fat: 0, carbs: 0 };
+    const { calories, protein: p, fat: f, carbs: c } = scaledNutrition;
     
     setBarcodeScannedProtein(p);
     setBarcodeScannedFat(f);
     setBarcodeScannedCarbs(c);
-    setBarcodeScannedCalories(Math.round(calculateCaloriesFromMacros(p, f, c) ?? 0));
+    setBarcodeScannedCalories(calories);
   };
 
   // Додавання знайденого за штрих-кодом продукту у щоденник
@@ -2049,7 +2054,8 @@ export default function App() {
         protein: finalProtein,
         fat: finalFat,
         carbs: finalCarbs,
-        weight: finalWeight
+        weight: finalWeight,
+        per100g
       }, 'barcode');
     }
     setMeals(prev => [newMeal, ...prev]);
@@ -2095,7 +2101,7 @@ export default function App() {
       : food.isAiSearch || food.source === 'ai-search'
         ? 'ai_estimate'
         : food.source || 'manual';
-    const per100g = roundNutritionValues({
+    const per100g = roundNutritionValues(food.per100g) || roundNutritionValues({
       calories: (Number(food.calories) || 0) * (isOffProduct ? 1 : scaleTo100),
       protein: (Number(food.protein) || 0) * (isOffProduct ? 1 : scaleTo100),
       fat: (Number(food.fat) || 0) * (isOffProduct ? 1 : scaleTo100),
@@ -2124,13 +2130,15 @@ export default function App() {
       confidence: food.confidence,
       warning: food.warning,
       totals: scaledNutrition,
-      original: {
-        calories: Number(food.calories),
-        protein: Number(food.protein),
-        fat: Number(food.fat),
-        carbs: Number(food.carbs),
-        weight: baselineWeight
-      }
+      original: isOffProduct
+        ? { ...per100g, weight: 100 }
+        : {
+            calories: Number(food.calories),
+            protein: Number(food.protein),
+            fat: Number(food.fat),
+            carbs: Number(food.carbs),
+            weight: baselineWeight
+          }
     });
 
     const finalCalories = newMeal.calories;
