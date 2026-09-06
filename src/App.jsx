@@ -89,7 +89,6 @@ import {
   getCalendarMealIndicators,
   getCategoryTotals,
   getDailyTotals,
-  getMacroProgress,
   getMealsByCategory,
   getMealsByDate,
   getRecentDatesForCategory as selectRecentDatesForCategory,
@@ -116,7 +115,6 @@ import {
   getTodayString,
   createMealId,
   formatDateLabel,
-  getDashboardTitle,
   calculateBMR,
   getActivityMultiplier
 } from './utils';
@@ -127,6 +125,10 @@ import {
   logAiPerformance
 } from './utils/aiPerformance';
 import useLocalStorageState from './hooks/useLocalStorageState';
+import DailySummary from './components/DailySummary';
+import FoodPortionDialog from './components/FoodPortionDialog';
+import { getRecentFoods } from './selectors/recentFoods';
+import './usability.css';
 
 const DEFAULT_API_KEY = import.meta.env.DEV ? SERVER_GEMINI_API_KEY : '';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
@@ -339,22 +341,16 @@ export default function App() {
   const [searchFoodWeight, setSearchFoodWeight] = useState(100);
   const [searchMealCategory, setSearchMealCategory] = useState('Сніданок');
 
-  // --- Aurora Glass: meal-detail bottom sheet ---
-  // detailItem holds whichever meal/food object is being inspected (a logged meal from
-  // Dashboard/Diary, or an unsaved "quick pick" demo food from the Scanner). `portion`
-  // is a display-only multiplier (never mutates the stored item until Save is pressed).
+  // Logged entries are edited as a draft and persisted only on Save.
   const [detailItem, setDetailItem] = useState(null);
-  const [portion, setPortion] = useState(1);
 
-  const openMealDetail = (item, isLogged) => {
+  const openMealDetail = (item) => {
     if (!item) return;
-    setDetailItem({ ...item, __isLoggedMeal: !!isLogged });
-    setPortion(1);
+    setDetailItem(item);
   };
 
   const closeMealDetail = () => {
     setDetailItem(null);
-    setPortion(1);
   };
   const [externalSearchFoods, setExternalSearchFoods] = useState([]);
   const [aiSearchFoods, setAiSearchFoods] = useState([]);
@@ -651,7 +647,7 @@ export default function App() {
   const [scannedMealCategory, setScannedMealCategory] = useState('Сніданок');
   const [barcodeMealCategory, setBarcodeMealCategory] = useState('Сніданок');
   const [calendarDate, setCalendarDate] = useState(new Date());
-  const [isCalendarExpanded, setIsCalendarExpanded] = useState(true);
+  const [isCalendarExpanded, setIsCalendarExpanded] = useState(false);
   const calendarMealIndicators = useMemo(
     () => getCalendarMealIndicators(normalizedMeals, calendarDate),
     [normalizedMeals, calendarDate]
@@ -664,6 +660,27 @@ export default function App() {
     if (currentHour >= 13 && currentHour < 17) return 'Обід';
     if (currentHour >= 17 && currentHour < 19) return 'Другий перекус';
     return 'Вечеря';
+  };
+
+
+  const openFoodSearch = (category = getDefaultCategory()) => {
+    setPreselectedCategory(category);
+    setSearchMealCategory(category);
+    setScannedMealCategory(category);
+    setBarcodeMealCategory(category);
+    setSelectedSearchFood(null);
+    setSearchQuery('');
+    setSelectedCategoryFilter('Усі');
+    setScannerMode('search');
+    setPreviousTab(activeTab === 'scanner' ? 'dashboard' : activeTab);
+    setActiveTab('scanner');
+  };
+
+  const finishFoodSearch = () => {
+    stopCamera();
+    setSelectedSearchFood(null);
+    setPreselectedCategory(null);
+    setActiveTab(previousTab === 'scanner' ? 'dashboard' : previousTab || 'dashboard');
   };
 
   const getDaysInMonthGrid = (dateObj) => {
@@ -1733,7 +1750,7 @@ export default function App() {
     // Відразу відкриваємо діалог додавання до щоденника
     setSelectedSearchFood({ ...newFood, isCustom: true });
     setSearchFoodWeight(defaultWeightVal);
-    setSearchMealCategory(getDefaultCategory());
+    setSearchMealCategory(preselectedCategory || searchMealCategory || getDefaultCategory());
   };
 
   // Збереження нового продукту для раніше невідомого штрих-коду
@@ -2059,13 +2076,17 @@ export default function App() {
   // foodOverride/weightOverride/categoryOverride let other flows (e.g. the meal-detail
   // bottom sheet's "quick pick" save action) reuse this exact add-to-log logic without
   // going through the `selectedSearchFood` search-panel state.
-  const addSearchMealToDiary = (foodOverride, weightOverride, categoryOverride) => {
+  const addSearchMealToDiary = (foodOverride, weightOverride, categoryOverride, stayOpen = false) => {
     const food = foodOverride || selectedSearchFood;
     if (!food) return;
 
     const category = categoryOverride || searchMealCategory;
     const baselineWeight = Number(food.weight) || 100;
-    const finalWeight = Number(weightOverride ?? searchFoodWeight) || baselineWeight;
+    const finalWeight = Number(weightOverride ?? searchFoodWeight);
+    if (!food.name || !Number.isFinite(finalWeight) || finalWeight < 1 || finalWeight > 5000) {
+      showToast('Вкажіть продукт і вагу від 1 до 5000 г.', 'error');
+      return;
+    }
     const scaleTo100 = 100 / baselineWeight;
     const isOffProduct = food.source === 'openfoodfacts';
     const isCustomProduct = food.isCustom || food.isCustomBarcode;
@@ -2134,14 +2155,15 @@ export default function App() {
       }, food.source === 'openfoodfacts' ? 'barcode' : 'ai-search');
     }
     setMeals(prev => [newMeal, ...prev]);
-    setPreselectedCategory(null);
-    showToast(`"${food.name}" додано до щоденника!`, "success");
-
-    if (!foodOverride) {
-      setSelectedSearchFood(null);
-      setSearchQuery('');
-      changeTab(previousTab || 'dashboard');
-    }
+    setSelectedSearchFood(null);
+    setSearchQuery('');
+    setSearchMealCategory(category);
+    setPreselectedCategory(stayOpen ? category : null);
+    showToast('«' + food.name + '» додано · ' + category, 'success', {
+      actionLabel: 'Скасувати',
+      onAction: () => setMeals(prev => prev.filter(meal => meal.id !== newMeal.id))
+    });
+    if (!stayOpen) finishFoodSearch();
   };
 
   const triggerAISmartSearch = async (queryToSearch) => {
@@ -2243,13 +2265,20 @@ export default function App() {
     ...mockFoods
   ], [learnedProducts, normalizedCustomFoods, customBarcodes]);
 
+  const recentFoods = useMemo(() => getRecentFoods(normalizedMeals, selectedDate), [normalizedMeals, selectedDate]);
+  const searchLibrary = useMemo(() => {
+    if (selectedCategoryFilter === 'Недавні') return recentFoods;
+    if (selectedCategoryFilter === 'Обрані') return normalizedFavorites;
+    return combinedFoods;
+  }, [combinedFoods, recentFoods, normalizedFavorites, selectedCategoryFilter]);
+
   const indexedCombinedFoods = useMemo(() => (
-    combinedFoods.map((food, index) => ({
+    searchLibrary.map((food, index) => ({
       ...food,
       searchIndexText: getFoodSearchText(food),
       catalogOrder: index
     }))
-  ), [combinedFoods]);
+  ), [searchLibrary]);
 
   const normalizedSearchQuery = useMemo(() => normalizeSearchText(searchQuery), [searchQuery]);
   const searchTokens = useMemo(() => normalizedSearchQuery.split(/\s+/).filter(Boolean), [normalizedSearchQuery]);
@@ -2285,7 +2314,7 @@ export default function App() {
     const matchesQuery = searchTokens.length === 0 || searchTokens.every(token => food.searchIndexText.includes(token));
     if (!matchesQuery) return false;
 
-    if (selectedCategoryFilter === 'Усі') return true;
+    if (['Усі', 'Недавні', 'Обрані'].includes(selectedCategoryFilter)) return true;
     if (selectedCategoryFilter === 'Моя база') {
       return Boolean(food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual');
     }
@@ -2341,6 +2370,7 @@ export default function App() {
     if (foodSortOption === 'name') {
       return a.name.localeCompare(b.name, 'uk');
     }
+    if (selectedCategoryFilter === 'Недавні') return a.catalogOrder - b.catalogOrder;
     const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
     if (rankDiff !== 0) return rankDiff;
     return a.catalogOrder - b.catalogOrder;
@@ -2397,10 +2427,10 @@ export default function App() {
     setMeals(prevMeals => prevMeals.map(meal => {
       if (meal.id === mealId) {
         const origWeight = Number(meal.originalWeight) || Number(meal.weight) || 200;
-        const origCals = Number(meal.originalCalories) || Number(meal.calories);
-        const origProt = Number(meal.originalProtein) || Number(meal.protein);
-        const origFat = Number(meal.originalFat) || Number(meal.fat);
-        const origCarbs = Number(meal.originalCarbs) || Number(meal.carbs);
+        const origCals = Number(meal.originalCalories ?? meal.calories);
+        const origProt = Number(meal.originalProtein ?? meal.protein);
+        const origFat = Number(meal.originalFat ?? meal.fat);
+        const origCarbs = Number(meal.originalCarbs ?? meal.carbs);
 
         if (value === "") {
           const clearedTotals = { calories: 0, protein: 0, fat: 0, carbs: 0 };
@@ -2421,7 +2451,7 @@ export default function App() {
         }
 
         const newWeight = Number(value);
-        if (isNaN(newWeight) || newWeight < 0) return meal;
+        if (!Number.isFinite(newWeight) || newWeight < 1 || newWeight > 5000) return meal;
 
         const scaleTo100 = 100 / origWeight;
         const scaledNutrition = scaleNutritionPer100g({
@@ -2493,31 +2523,11 @@ export default function App() {
     }));
   };
 
-  // Застосувати обраний множник порції у сторінці деталей страви та зберегти:
-  // — для вже залогованої страви (Dashboard/Diary) масштабує її вагу через
-  //   вже наявний handleUpdateMealWeight;
-  // — для ще не залогованого "quick pick" продукту (Scanner) додає новий запис
-  //   через вже наявний addSearchMealToDiary.
-  const handleSaveMealDetailPortion = () => {
-    if (!detailItem) return;
-    const baseWeight = Number(detailItem.weight) || 100;
-    const newWeight = Math.round(baseWeight * portion) || baseWeight;
-
-    if (detailItem.__isLoggedMeal && detailItem.id) {
-      handleUpdateMealWeight(detailItem.id, newWeight);
-      showToast(`Порцію "${detailItem.name}" оновлено!`, "success");
-    } else {
-      addSearchMealToDiary(detailItem, newWeight, preselectedCategory || searchMealCategory || 'Сніданок');
-    }
-    closeMealDetail();
-  };
-
   // --- Calculations for Current Day ---
   const currentDayMeals = useMemo(() => getMealsByDate(normalizedMeals, selectedDate), [normalizedMeals, selectedDate]);
   const totals = useMemo(() => getDailyTotals(currentDayMeals), [currentDayMeals]);
   const currentDayMealsByCategory = useMemo(() => getMealsByCategory(currentDayMeals), [currentDayMeals]);
   const currentDayCategoryTotals = useMemo(() => getCategoryTotals(currentDayMeals), [currentDayMeals]);
-  const macroProgress = useMemo(() => getMacroProgress(totals, profile), [totals, profile]);
 
   const currentWater = waterIntake[selectedDate] || 0;
 
@@ -2874,10 +2884,6 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const calPercent = macroProgress.calories;
-  const radius = 58;
-  const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference - (calPercent / 100) * circumference;
 
 
 
@@ -2985,7 +2991,7 @@ export default function App() {
             {/* Date Swiper */}
             <div className="diary-day-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                <h2 className="section-title" style={{ marginBottom: 0 }}>{getDashboardTitle(selectedDate)}</h2>
+                <h2 className="section-title" style={{ marginBottom: 0 }}>Мій щоденник</h2>
                 {(() => {
                   const streak = calculateStreak();
                   return streak > 0 ? (
@@ -2997,11 +3003,11 @@ export default function App() {
                 })()}
               </div>
               <div className="date-picker-bar">
-                <button className="date-arrow-btn" onClick={() => changeDate(-1)}>
+                <button className="date-arrow-btn" aria-label="Попередній день" onClick={() => changeDate(-1)}>
                   <ChevronLeft size={20} />
                 </button>
-                <span className="date-display">{formatDateLabel(selectedDate)}</span>
-                <button className="date-arrow-btn" onClick={() => changeDate(1)}>
+                <label className="diary-date-picker"><span>{formatDateLabel(selectedDate)}</span><input type="date" aria-label="Дата щоденника" value={selectedDate} onChange={event => { if (event.target.value) setSelectedDate(event.target.value); }} /></label>
+                <button className="date-arrow-btn" aria-label="Наступний день" onClick={() => changeDate(1)}>
                   <ChevronRight size={20} />
                 </button>
                 {selectedDate !== getTodayString() && (
@@ -3017,94 +3023,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Glassmorphism Circle Progress Card */}
-            <div className="glass-card">
-              <div className="dashboard-summary">
-                <div className="circular-progress-container">
-                  <svg className="circular-progress-svg" viewBox="0 0 140 140" aria-label="Прогрес калорій за день">
-                    <circle className="progress-bg-circle" cx="70" cy="70" r={radius} />
-                    <circle 
-                      className="progress-active-circle" 
-                      cx="70" 
-                      cy="70" 
-                      r={radius} 
-                      strokeDasharray={circumference}
-                      strokeDashoffset={strokeDashoffset}
-                    />
-                  </svg>
-                  <div className="circular-progress-text">
-                    <span className="calories-val">{totals.calories}</span>
-                    <span className="calories-label">ккал</span>
-                    <span className="calories-target">з {profile.targetCalories}</span>
-                  </div>
-                </div>
-
-                <div className="macros-progress-grid">
-                  {/* Protein */}
-                  <div className="macro-bar-item">
-                    <div className="macro-bar-header">
-                      <span className="macro-bar-name">
-                        <span className="macro-dot dot-protein"></span>
-                        Білки
-                      </span>
-                      <span className="macro-bar-value">
-                        <span className="macro-val-current">{totals.protein}г</span>
-                        <span className="macro-val-divider">/</span>
-                        <span className="macro-val-target">{profile.targetProtein}г</span>
-                      </span>
-                    </div>
-                    <div className="macro-bar-track">
-                      <div 
-                        className="macro-bar-fill fill-protein" 
-                        style={{ width: `${macroProgress.protein}%` }}
-                      ></div>
-                    </div>
-                  </div>
-
-                  {/* Fat */}
-                  <div className="macro-bar-item">
-                    <div className="macro-bar-header">
-                      <span className="macro-bar-name">
-                        <span className="macro-dot dot-fat"></span>
-                        Жири
-                      </span>
-                      <span className="macro-bar-value">
-                        <span className="macro-val-current">{totals.fat}г</span>
-                        <span className="macro-val-divider">/</span>
-                        <span className="macro-val-target">{profile.targetFat}г</span>
-                      </span>
-                    </div>
-                    <div className="macro-bar-track">
-                      <div 
-                        className="macro-bar-fill fill-fat" 
-                        style={{ width: `${macroProgress.fat}%` }}
-                      ></div>
-                    </div>
-                  </div>
-
-                  {/* Carbs */}
-                  <div className="macro-bar-item">
-                    <div className="macro-bar-header">
-                      <span className="macro-bar-name">
-                        <span className="macro-dot dot-carbs"></span>
-                        Вуглеводи
-                      </span>
-                      <span className="macro-bar-value">
-                        <span className="macro-val-current">{totals.carbs}г</span>
-                        <span className="macro-val-divider">/</span>
-                        <span className="macro-val-target">{profile.targetCarbs}г</span>
-                      </span>
-                    </div>
-                    <div className="macro-bar-track">
-                      <div 
-                        className="macro-bar-fill fill-carbs" 
-                        style={{ width: `${macroProgress.carbs}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <DailySummary totals={totals} profile={profile} onAdd={() => openFoodSearch()} />
 
             {/* Water Tracker */}
             {showWaterTracker && (
@@ -3112,7 +3031,7 @@ export default function App() {
               <div className="water-left">
                 <div className="water-icon-box" style={{ overflow: 'visible', position: 'relative' }}>
                   {(() => {
-                    const waterPercent = Math.min((currentWater / 2000) * 100, 100);
+                    const waterPercent = Math.min((currentWater / (profile.targetWater || 2000)) * 100, 100);
                     return (
                       <svg 
                         viewBox="0 0 24 24" 
@@ -3204,74 +3123,6 @@ export default function App() {
             </div>
             )}
 
-            {/* Favorites Scroll Tray */}
-            {normalizedFavorites.length > 0 && (
-              <div className="favorites-container" style={{ marginTop: '24px' }}>
-                <h3 className="section-title" style={{ marginBottom: '12px' }}>Обрані страви</h3>
-                <div className="favorites-scroll-tray">
-                  {normalizedFavorites.map((fav, index) => (
-                    <div key={index} className="favorite-meal-card">
-                      {fav.image ? (
-                        <img src={fav.image} alt={fav.name} className="favorite-meal-img" />
-                      ) : (
-                        <div className="favorite-meal-img-placeholder">
-                          <span>🍳</span>
-                        </div>
-                      )}
-                      <div className="favorite-meal-info">
-                        <span className="favorite-meal-name" title={fav.name}>{fav.name}</span>
-                        <span className="favorite-meal-kcal">{fav.calories} ккал</span>
-                        <span className="favorite-meal-weight">{fav.weight}г</span>
-                      </div>
-                      <div className="favorite-meal-actions">
-                        <button 
-                          className="btn-fav-add" 
-                          onClick={() => {
-                            const category = getDefaultCategory();
-                            const newMeal = createMealEntryFromFavorite(fav, {
-                              id: createMealId(),
-                              date: selectedDate,
-                              category,
-                              mealType: category,
-                              icon: getEmojiForCategory(category)
-                            });
-                            setMeals(prev => [newMeal, ...prev]);
-                            showToast(`"${fav.name}" додано до щоденника!`, "success");
-                          }}
-                          title="Додати в щоденник"
-                        >
-                          Додати
-                        </button>
-                        <button 
-                          className="btn-fav-remove" 
-                          onClick={() => {
-                            setFavorites(prev => prev.filter(f => normalizeSearchText(f.name) !== normalizeSearchText(fav.name)));
-                            showToast(`"${fav.name}" видалено з обраного`, "info");
-                          }}
-                          title="Видалити з шаблонів"
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: 'rgba(255, 255, 255, 0.4)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '4px',
-                            transition: 'color 0.2s'
-                          }}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-
-
             {/* Meals Timeline */}
             <div style={{ marginTop: '24px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
@@ -3326,13 +3177,11 @@ export default function App() {
                           <button 
                             className="category-add-btn" 
                             onClick={() => {
-                              setPreselectedCategory(cat.name);
-                              setScannerMode('search');
-                              changeTab('scanner');
+                              openFoodSearch(cat.name);
                             }}
                             title={`Додати до: ${cat.name}`}
                           >
-                            <Plus size={16} />
+                            <Plus size={16} /><span className="category-add-label">Додати</span>
                           </button>
 
                           {activeCopyMenu?.category === cat.name && activeCopyMenu?.tab === 'dashboard' && (
@@ -3412,16 +3261,16 @@ export default function App() {
                       </div>
                       
                       {catMeals.length === 0 ? (
-                        <div className="category-empty-placeholder">
-                          <span>Немає страв</span>
-                        </div>
+                        <button type="button" className="category-empty-placeholder" onClick={() => openFoodSearch(cat.name)}>
+                          <Plus size={16} /><span>Додати перший продукт</span>
+                        </button>
                       ) : (
                         <div className="category-meals-list">
                           {catMeals.map(meal => (
                             <div key={meal.id} className="timeline-item">
                               <div
                                 className="meal-info"
-                                onClick={() => openMealDetail(meal, true)}
+                                onClick={() => openMealDetail(meal)}
                                 style={{ cursor: 'pointer' }}
                                 title="Переглянути деталі страви"
                               >
@@ -3433,14 +3282,7 @@ export default function App() {
                                     style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}
                                     onClick={(e) => e.stopPropagation()}
                                   >
-                                    <input 
-                                      type="number"
-                                      value={meal.weight}
-                                      onChange={(e) => handleUpdateMealWeight(meal.id, e.target.value)}
-                                      className="meal-weight-input"
-                                      min="1"
-                                      max="5000"
-                                    />
+                                    <button type="button" className="meal-weight-edit" aria-label={`Змінити порцію: ${meal.name}`} onClick={() => openMealDetail(meal)}>{meal.weight}<Pencil size={12} /></button>
                                     <span>г</span>
                                   </span>
                                 </div>
@@ -3538,8 +3380,7 @@ export default function App() {
               <div style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
                 <button 
                   onClick={() => {
-                    stopCamera();
-                    changeTab(previousTab || 'dashboard');
+                    finishFoodSearch();
                   }}
                   className="btn-secondary"
                   style={{ 
@@ -3559,11 +3400,22 @@ export default function App() {
                   fontWeight: 600, 
                   fontSize: '16px' 
                 }}>
-                  Сканування та Пошук
+                  Додати їжу
                 </div>
                 <div style={{ width: '60px' }}></div> {/* Spacer */}
               </div>
 
+              <div className="add-food-context">
+                <span>{formatDateLabel(selectedDate)}</span>
+                <select aria-label="Прийом їжі для додавання" value={searchMealCategory} onChange={event => {
+                  setSearchMealCategory(event.target.value);
+                  setPreselectedCategory(event.target.value);
+                  setScannedMealCategory(event.target.value);
+                  setBarcodeMealCategory(event.target.value);
+                }}>
+                  {['Сніданок', 'Перший перекус', 'Обід', 'Другий перекус', 'Вечеря'].map(category => <option key={category}>{category}</option>)}
+                </select>
+              </div>
               {/* Режими сканування */}
               <div className="scanner-sub-tabs" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
                 <button 
@@ -4356,7 +4208,7 @@ export default function App() {
                     }}
                   >
                     <Plus size={16} />
-                    <span>➕ Додати продукт вручну</span>
+                    <span>Свій продукт</span>
                   </button>
                 </div>
                 {/* Search Input Box */}
@@ -4364,7 +4216,8 @@ export default function App() {
                   <input
                     type="text"
                     className="search-input-field"
-                    placeholder="Пошук продуктів і супермаркетів (напр. Молоко АТБ, Йогурт Сільпо...)"
+                    placeholder="Назва продукту або бренд"
+                    aria-label="Пошук продуктів"
                     value={searchQuery}
                     onChange={(e) => {
                       setSearchQuery(e.target.value);
@@ -4378,7 +4231,6 @@ export default function App() {
                         setShowSuggestions(false);
                       }
                     }}
-                    autoFocus
                   />
 
                   {/* Autocomplete Suggestions Dropdown */}
@@ -4438,37 +4290,17 @@ export default function App() {
                   })()}
                 </div>
 
-                {/* Quick pick — швидкий вибір демо-страв, відкриває картку деталей */}
-                {!searchQuery.trim() && (
-                  <div style={{ marginBottom: '4px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px 8px' }}>
-                      <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-dark-secondary)' }}>Швидкий вибір</span>
-                    </div>
-                    <div className="demo-food-tray" style={{ padding: '0 16px 16px' }}>
-                      {mockFoods.slice(0, 10).map(food => (
-                        <div
-                          key={food.id}
-                          className="demo-food-card"
-                          onClick={() => openMealDetail(food, false)}
-                          style={{
-                            flex: '0 0 128px',
-                            height: '100px',
-                            background: 'linear-gradient(160deg, rgba(16, 185, 129, 0.18), rgba(99, 102, 241, 0.14))'
-                          }}
-                          title={`Переглянути "${food.name}"`}
-                        >
-                          <div className="demo-food-card-icon">{food.icon || '🍽️'}</div>
-                          <div className="demo-food-card-content">
-                            <p className="demo-food-card-title">{food.name}</p>
-                            <div className="demo-food-card-nutrients">
-                              <span className="demo-food-kcal">{food.calories} ккал</span>
-                              <span className="demo-food-macros">{food.weight}г</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                {!searchQuery.trim() && selectedCategoryFilter === 'Усі' && recentFoods.length > 0 && (
+                  <section className="recent-foods" aria-label="Нещодавні продукти">
+                    <div className="recent-foods-heading"><h3>Нещодавно додавали</h3><button type="button" onClick={() => setSelectedCategoryFilter('Недавні')}>Усі недавні</button></div>
+                    {recentFoods.slice(0, 3).map(food => (
+                      <button type="button" className="recent-food-row" key={food.id} onClick={() => selectSearchFood(food)}>
+                        <span className="recent-food-icon" aria-hidden="true">{food.icon || '🍽️'}</span>
+                        <span><strong>{food.name}</strong><small>{food.weight} г · {food.calories} ккал{food.brand ? ' · ' + food.brand : ''}</small></span>
+                        <Plus size={20} />
+                      </button>
+                    ))}
+                  </section>
                 )}
 
                 {/* AI Smart Search Button */}
@@ -4510,7 +4342,7 @@ export default function App() {
 
                 {/* Filter Chips */}
                 <div className="filter-chips-container">
-                  {['Усі', 'Моя база', 'Часті', 'Супермаркети', 'Страви', 'Обрані', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
+                  {['Усі', 'Недавні', 'Обрані', 'Моя база', 'Часті', 'Супермаркети', 'Страви', 'Сніданок', 'Обід', 'Вечеря', 'Перекуси'].map(filter => (
                     <button
                       key={filter}
                       className={`filter-chip ${selectedCategoryFilter === filter ? 'active' : ''}`}
@@ -4564,7 +4396,7 @@ export default function App() {
 
                   {filteredSearchFoods.length === 0 && filteredExternalSearchFoods.length === 0 && filteredAiSearchFoods.length === 0 && !isSearchingExternal && !isSearchingAI ? (
                     <div style={{ textAlign: 'center', color: '#94a3b8', padding: '40px 20px', fontSize: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                      <span>Нічого не знайдено в базі. Натисніть кнопку ШІ-пошуку вище, щоб знайти цей продукт!</span>
+                      <span>{selectedCategoryFilter === 'Недавні' ? 'Тут з’являться продукти, які ви додасте до щоденника.' : selectedCategoryFilter === 'Обрані' ? 'Позначте продукт зірочкою, щоб швидко знайти його тут.' : 'Продуктів не знайдено. Спробуйте іншу назву або створіть свій продукт.'}</span>
                       <button
                         className="btn-primary"
                         style={{ marginTop: '8px', padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: 'auto' }}
@@ -4580,7 +4412,7 @@ export default function App() {
                         }}
                       >
                         <Plus size={16} />
-                        Додати "{searchQuery}" вручну
+                        {searchQuery ? 'Створити «' + searchQuery + '»' : 'Створити свій продукт'}
                       </button>
                     </div>
                   ) : (
@@ -4594,6 +4426,9 @@ export default function App() {
                           <div
                             key={food.id}
                             className="search-food-item"
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSearchFood(food); } }}
                             style={borderCol ? { borderLeft: `4px solid ${borderCol}` } : undefined}
                             onClick={() => {
                               selectSearchFood(food);
@@ -4602,13 +4437,6 @@ export default function App() {
                             <span style={{ fontSize: '24px', marginRight: '8px' }}>{food.icon || '🥗'}</span>
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
                               <span
-                                onClick={(event) => {
-                                  if (food.isCustom || food.isCustomBarcode) {
-                                    event.stopPropagation();
-                                    openCustomFoodEditor(food);
-                                  }
-                                }}
-                                title={food.isCustom || food.isCustomBarcode ? "Редагувати КБЖВ" : undefined}
                                 style={{
                                   fontWeight: 600,
                                   fontSize: '14px',
@@ -4659,6 +4487,9 @@ export default function App() {
                           <div
                             key={food.id}
                             className="search-food-item"
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSearchFood(food); } }}
                             style={{ borderLeft: `4px solid ${borderCol}` }}
                             onClick={() => {
                               openCustomFoodForm({
@@ -4687,6 +4518,9 @@ export default function App() {
                         <div
                           key={food.id}
                           className="search-food-item"
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSearchFood(food); } }}
                           style={{ borderLeft: '3px solid var(--color-water)' }}
                           onClick={() => {
                             setCustomFoodName(food.name);
@@ -4715,184 +4549,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Selected Food Detail Card (similar to scan-result-card) */}
-                {selectedSearchFood && (
-                  <div className="scan-result-card" style={{ zIndex: 100 }}>
-                    <button
-                      onClick={() => setSelectedSearchFood(null)}
-                      style={{
-                        position: 'absolute',
-                        top: '16px',
-                        right: '16px',
-                        background: 'rgba(255, 255, 255, 0.08)',
-                        border: 'none',
-                        color: '#fff',
-                        width: '32px',
-                        height: '32px',
-                        borderRadius: '50%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                        zIndex: 100
-                      }}
-                      title="Закрити"
-                    >
-                      <X size={16} />
-                    </button>
-                    <div className="results-header" style={{ marginBottom: '8px' }}>
-                      <div className="barcode-product-info" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                        <div style={{ fontSize: '36px' }}>{selectedSearchFood.icon || '🥗'}</div>
-                        <div style={{ textAlign: 'left' }}>
-                          {selectedSearchFood.brand && <span className="match-badge">{selectedSearchFood.brand}</span>}
-                          <h2
-                            className="dish-title"
-                            onClick={() => {
-                              if (selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode) {
-                                openCustomFoodEditor(selectedSearchFood);
-                              }
-                            }}
-                            title={selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode ? "Редагувати КБЖВ" : undefined}
-                            style={{
-                              fontSize: '18px',
-                              marginTop: '2px',
-                              cursor: selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode ? 'pointer' : 'default'
-                            }}
-                          >
-                            {selectedSearchFood.name}
-                          </h2>
-                        </div>
-                      </div>
-                    </div>
-
-                    {(() => {
-                      const factor = Number(searchFoodWeight) / Number(selectedSearchFood.weight);
-                      const scaledKcal = Math.round(Number(selectedSearchFood.calories) * factor);
-                      const scaledProt = Math.round(Number(selectedSearchFood.protein) * factor * 10) / 10;
-                      const scaledFat = Math.round(Number(selectedSearchFood.fat) * factor * 10) / 10;
-                      const scaledCarbs = Math.round(Number(selectedSearchFood.carbs) * factor * 10) / 10;
-
-                      return (
-                        <>
-                          <div className="results-macros-grid">
-                            <div className="results-macro-box box-kcal">
-                              <div className="macro-box-val" style={{ color: 'var(--color-calories)' }}>{scaledKcal}</div>
-                              <div className="macro-box-label">ккал</div>
-                            </div>
-                            <div className="results-macro-box box-protein">
-                              <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
-                                <span style={{ color: 'var(--color-protein)', fontSize: '18px', fontWeight: 700 }}>{scaledProt}</span>
-                                <span style={{ color: 'var(--color-protein)', fontSize: '12px', fontWeight: 700 }}>г</span>
-                              </div>
-                              <div className="macro-box-label">білки</div>
-                            </div>
-                            <div className="results-macro-box box-fat">
-                              <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
-                                <span style={{ color: 'var(--color-fat)', fontSize: '18px', fontWeight: 700 }}>{scaledFat}</span>
-                                <span style={{ color: 'var(--color-fat)', fontSize: '12px', fontWeight: 700 }}>г</span>
-                              </div>
-                              <div className="macro-box-label">жири</div>
-                            </div>
-                            <div className="results-macro-box box-carbs">
-                              <div className="macro-box-val-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1px' }}>
-                                <span style={{ color: 'var(--color-carbs)', fontSize: '18px', fontWeight: 700 }}>{scaledCarbs}</span>
-                                <span style={{ color: 'var(--color-carbs)', fontSize: '12px', fontWeight: 700 }}>г</span>
-                              </div>
-                              <div className="macro-box-label">вуглеводи</div>
-                            </div>
-                          </div>
-
-                          <div className="detail-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-                            <span className="detail-label">Прийом їжі:</span>
-                            <select
-                              className="category-select"
-                              value={searchMealCategory}
-                              onChange={(e) => setSearchMealCategory(e.target.value)}
-                            >
-                              <option value="Сніданок">Сніданок</option>
-                              <option value="Перший перекус">Перший перекус</option>
-                              <option value="Обід">Обід</option>
-                              <option value="Другий перекус">Другий перекус</option>
-                              <option value="Вечеря">Вечеря</option>
-                            </select>
-                          </div>
-
-                          <div className="detail-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <span className="detail-label">Вага продукту (грам):</span>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <input
-                                type="number"
-                                className="weight-input"
-                                value={searchFoodWeight}
-                                onChange={(e) => setSearchFoodWeight(e.target.value)}
-                                min="1"
-                                max="5000"
-                              />
-                              <span style={{ fontSize: '11px', opacity: 0.6 }}>(ориг. {selectedSearchFood.weight}г)</span>
-                            </div>
-                          </div>
-
-                          <QuickPortionButtons
-                            baseWeight={selectedSearchFood.weight || 100}
-                            name={selectedSearchFood.name}
-                            currentWeight={searchFoodWeight}
-                            preferredWeight={getRememberedFoodPortion(selectedSearchFood)}
-                            onSelect={setSearchFoodWeight}
-                          />
-
-                          {selectedSearchFood.ingredients && (
-                            <div className="detail-row" style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
-                              <span className="detail-label">Склад продукту:</span>
-                              <span className="detail-value" style={{ fontStyle: 'italic', fontSize: '11px', color: '#94a3b8', maxHeight: '70px', overflowY: 'auto', display: 'block', textAlign: 'left' }}>
-                                {selectedSearchFood.ingredients}
-                              </span>
-                            </div>
-                          )}
-
-                          <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <div style={{ display: 'flex', gap: '10px' }}>
-                              <button className="btn-primary" style={{ flex: 1 }} onClick={addSearchMealToDiary}>
-                                <Check size={18} />
-                                Додати до щоденника
-                              </button>
-                              {(selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode) && (
-                                <button
-                                  className="btn-secondary"
-                                  onClick={() => openCustomFoodEditor(selectedSearchFood)}
-                                  style={{ width: '46px', height: '46px', padding: 0, justifyContent: 'center' }}
-                                  title="Редагувати КБЖВ"
-                                  aria-label="Редагувати КБЖВ"
-                                >
-                                  <Pencil size={18} />
-                                </button>
-                              )}
-                              <button 
-                                className={`btn-favorite-toggle ${isFavorite(selectedSearchFood.name) ? 'active' : ''}`}
-                                onClick={() => toggleFavoriteMeal(selectedSearchFood)}
-                                title={isFavorite(selectedSearchFood.name) ? "Видалити з обраного" : "Додати в обране"}
-                                style={{
-                                  width: '46px',
-                                  height: '46px',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  borderRadius: '12px',
-                                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                                  background: isFavorite(selectedSearchFood.name) ? 'rgba(255, 184, 0, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                                  color: isFavorite(selectedSearchFood.name) ? '#ffb800' : 'rgba(255, 255, 255, 0.8)',
-                                  cursor: 'pointer',
-                                  transition: 'all 0.2s ease',
-                                }}
-                              >
-                                <Star size={20} fill={isFavorite(selectedSearchFood.name) ? "#ffb800" : "none"} />
-                              </button>
-                            </div>
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </div>
-                )}
               </div>
             )}
 
@@ -5142,33 +4798,7 @@ export default function App() {
               )}
             </div>
 
-            {/* Daily Macro Details Card */}
-            <div className="glass-card">
-              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px' }}>Статистика харчування за день</h3>
-              
-              <div className="results-macros-grid" style={{ marginBottom: 0 }}>
-                <div className="results-macro-box box-kcal" style={{ background: 'rgba(255,255,255,0.01)' }}>
-                  <div className="macro-box-val" style={{ fontSize: '14px' }}>{totals.calories}</div>
-                  <div className="macro-box-label" style={{ fontSize: '9px' }}>ккал</div>
-                  <div style={{ fontSize: '8px', color: 'var(--text-dark-muted)', marginTop: '2px' }}>Ціль: {profile.targetCalories}</div>
-                </div>
-                <div className="results-macro-box box-protein" style={{ background: 'rgba(255,255,255,0.01)' }}>
-                  <div className="macro-box-val" style={{ fontSize: '14px' }}>{totals.protein}г</div>
-                  <div className="macro-box-label" style={{ fontSize: '9px' }}>білки</div>
-                  <div style={{ fontSize: '8px', color: 'var(--text-dark-muted)', marginTop: '2px' }}>Ціль: {profile.targetProtein}г</div>
-                </div>
-                <div className="results-macro-box box-fat" style={{ background: 'rgba(255,255,255,0.01)' }}>
-                  <div className="macro-box-val" style={{ fontSize: '14px' }}>{totals.fat}г</div>
-                  <div className="macro-box-label" style={{ fontSize: '9px' }}>жири</div>
-                  <div style={{ fontSize: '8px', color: 'var(--text-dark-muted)', marginTop: '2px' }}>Ціль: {profile.targetFat}г</div>
-                </div>
-                <div className="results-macro-box box-carbs" style={{ background: 'rgba(255,255,255,0.01)' }}>
-                  <div className="macro-box-val" style={{ fontSize: '14px' }}>{totals.carbs}г</div>
-                  <div className="macro-box-label" style={{ fontSize: '9px' }}>вугл.</div>
-                  <div style={{ fontSize: '8px', color: 'var(--text-dark-muted)', marginTop: '2px' }}>Ціль: {profile.targetCarbs}г</div>
-                </div>
-              </div>
-            </div>
+            <DailySummary totals={totals} profile={profile} onAdd={() => openFoodSearch()} />
 
             {/* List of meals by categories */}
             <div style={{ marginTop: '24px' }}>
@@ -5224,13 +4854,11 @@ export default function App() {
                           <button 
                             className="category-add-btn" 
                             onClick={() => {
-                              setPreselectedCategory(cat.name);
-                              setScannerMode('search');
-                              changeTab('scanner');
+                              openFoodSearch(cat.name);
                             }}
                             title={`Додати до: ${cat.name}`}
                           >
-                            <Plus size={16} />
+                            <Plus size={16} /><span className="category-add-label">Додати</span>
                           </button>
 
                           {activeCopyMenu?.category === cat.name && activeCopyMenu?.tab === 'diary' && (
@@ -5310,16 +4938,16 @@ export default function App() {
                       </div>
                       
                       {catMeals.length === 0 ? (
-                        <div className="category-empty-placeholder">
-                          <span>Немає страв</span>
-                        </div>
+                        <button type="button" className="category-empty-placeholder" onClick={() => openFoodSearch(cat.name)}>
+                          <Plus size={16} /><span>Додати перший продукт</span>
+                        </button>
                       ) : (
                         <div className="category-meals-list">
                           {catMeals.map(meal => (
                             <div key={meal.id} className="timeline-item">
                               <div
                                 className="meal-info"
-                                onClick={() => openMealDetail(meal, true)}
+                                onClick={() => openMealDetail(meal)}
                                 style={{ cursor: 'pointer' }}
                                 title="Переглянути деталі страви"
                               >
@@ -5331,14 +4959,7 @@ export default function App() {
                                     style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', whiteSpace: 'nowrap' }}
                                     onClick={(e) => e.stopPropagation()}
                                   >
-                                    <input 
-                                      type="number"
-                                      value={meal.weight}
-                                      onChange={(e) => handleUpdateMealWeight(meal.id, e.target.value)}
-                                      className="meal-weight-input"
-                                      min="1"
-                                      max="5000"
-                                    />
+                                    <button type="button" className="meal-weight-edit" aria-label={`Змінити порцію: ${meal.name}`} onClick={() => openMealDetail(meal)}>{meal.weight}<Pencil size={12} /></button>
                                     <span>г</span>
                                   </span>
                                 </div>
@@ -5434,7 +5055,7 @@ export default function App() {
         {/* ========================================================================= */}
         {activeTab === 'profile' && (
           <div>
-            <h2 className="section-title">Профіль користувача</h2>
+            <div className="profile-heading"><h2 className="section-title">Профіль</h2><button type="button" className="portion-icon-button" onClick={() => changeTab('settings')} aria-label="Налаштування"><Settings size={22} /></button></div>
 
             {/* Profile Avatar Header */}
             <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -6517,11 +6138,12 @@ export default function App() {
           className="scan-fab" 
           onClick={(e) => {
             e.stopPropagation();
-            setActiveTab('scanner');
+            openFoodSearch();
           }}
-          title="Сканувати їжу"
+          title="Додати їжу"
+          aria-label="Додати їжу"
         >
-          <Camera size={30} />
+          <Plus size={30} />
         </button>
       )}
 
@@ -6533,14 +6155,14 @@ export default function App() {
             onClick={() => setActiveTab('dashboard')}
           >
             <LayoutDashboard size={22} />
-            <span>Головна</span>
+            <span>Щоденник</span>
           </button>
           <button 
             className={`nav-item ${activeTab === 'diary' ? 'active' : ''}`}
             onClick={() => setActiveTab('diary')}
           >
             <Calendar size={22} />
-            <span>Щоденник</span>
+            <span>Календар</span>
           </button>
 
           {/* Center Spacer for Floating Action Button */}
@@ -6560,93 +6182,43 @@ export default function App() {
             <User size={22} />
             <span>Профіль</span>
           </button>
-          <button 
-            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => setActiveTab('settings')}
-            aria-label="Налаштування"
-            title="Налаштування"
-          >
-            <Settings size={22} />
-            <span>Налашт.</span>
-          </button>
         </nav>
       )}
 
-      {/* --- Aurora Glass: meal-detail bottom sheet --- */}
-      {detailItem && (() => {
-        const baseWeight = Number(detailItem.weight) || 100;
-        const baseCalories = Number(detailItem.calories) || 0;
-        const baseProtein = Number(detailItem.protein) || 0;
-        const baseFat = Number(detailItem.fat) || 0;
-        const baseCarbs = Number(detailItem.carbs) || 0;
-
-        const dispCalories = Math.round(baseCalories * portion);
-        const dispProtein = Math.round(baseProtein * portion * 10) / 10;
-        const dispFat = Math.round(baseFat * portion * 10) / 10;
-        const dispCarbs = Math.round(baseCarbs * portion * 10) / 10;
-        const dispWeight = Math.round(baseWeight * portion);
-
-        const portionOptions = [
-          { value: 0.5, label: '½ порції' },
-          { value: 1, label: '1 порція' },
-          { value: 1.5, label: '1½ порції' },
-          { value: 2, label: '2 порції' }
-        ];
-
-        return (
-          <div className="meal-detail-backdrop" onClick={closeMealDetail}>
-            <div className="meal-detail-sheet" onClick={(e) => e.stopPropagation()}>
-              <div className="meal-detail-header">
-                <div className="meal-detail-header-info">
-                  <div className="meal-detail-emoji">{detailItem.icon || '🍽️'}</div>
-                  <h3 className="meal-detail-title">{detailItem.name}</h3>
-                </div>
-                <button className="meal-detail-close-btn" onClick={closeMealDetail} aria-label="Закрити" title="Закрити">
-                  <X size={16} />
-                </button>
-              </div>
-
-              <div className="quick-portion-row" style={{ margin: '0 0 4px', padding: 0 }}>
-                {portionOptions.map(opt => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className={`quick-portion-chip ${portion === opt.value ? 'active' : ''}`}
-                    onClick={() => setPortion(opt.value)}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="sheet-kcal-card">
-                <span className="sheet-kcal-val">{dispCalories}</span>
-                <span className="sheet-kcal-label">ккал · {dispWeight} г</span>
-              </div>
-
-              <div className="sheet-macro-grid">
-                <div className="sheet-macro-cell">
-                  <span className="sheet-macro-val" style={{ color: 'var(--color-protein)' }}>{dispProtein}г</span>
-                  <span className="sheet-macro-label">Білки</span>
-                </div>
-                <div className="sheet-macro-cell">
-                  <span className="sheet-macro-val" style={{ color: 'var(--color-fat)' }}>{dispFat}г</span>
-                  <span className="sheet-macro-label">Жири</span>
-                </div>
-                <div className="sheet-macro-cell">
-                  <span className="sheet-macro-val" style={{ color: 'var(--color-carbs)' }}>{dispCarbs}г</span>
-                  <span className="sheet-macro-label">Вуглеводи</span>
-                </div>
-              </div>
-
-              <button className="btn-save-portion" onClick={handleSaveMealDetailPortion}>
-                <Check size={18} />
-                Зберегти в щоденник
-              </button>
-            </div>
-          </div>
-        );
-      })()}
+      {selectedSearchFood && activeTab === 'scanner' && (
+        <FoodPortionDialog
+          food={selectedSearchFood}
+          initialWeight={searchFoodWeight}
+          initialCategory={searchMealCategory}
+          dateLabel={formatDateLabel(selectedDate)}
+          favorite={isFavorite(selectedSearchFood.name)}
+          onFavorite={() => toggleFavoriteMeal(selectedSearchFood)}
+          onEdit={selectedSearchFood.isCustom || selectedSearchFood.isCustomBarcode ? () => {
+            openCustomFoodEditor(selectedSearchFood);
+            setSelectedSearchFood(null);
+          } : undefined}
+          onClose={() => setSelectedSearchFood(null)}
+          onSave={(grams, category, stayOpen) => addSearchMealToDiary(selectedSearchFood, grams, category, stayOpen)}
+        />
+      )}
+      {detailItem && (
+        <FoodPortionDialog
+          food={detailItem}
+          initialWeight={detailItem.weight}
+          initialCategory={detailItem.category || detailItem.mealType}
+          dateLabel={formatDateLabel(detailItem.date || selectedDate)}
+          editing
+          favorite={isFavorite(detailItem.name)}
+          onFavorite={() => toggleFavoriteMeal(detailItem)}
+          onClose={closeMealDetail}
+          onSave={(grams, category) => {
+            handleUpdateMealWeight(detailItem.id, grams);
+            setMeals(prev => prev.map(meal => meal.id === detailItem.id ? { ...meal, category, mealType: category } : meal));
+            closeMealDetail();
+            showToast('Запис оновлено', 'success');
+          }}
+        />
+      )}
 
       {/* Модальне вікно для створення продукту вручну */}
       {isCustomFoodModalOpen && (
@@ -6906,7 +6478,7 @@ export default function App() {
 
       {toast && (
         <div className={`toast-notification toast-${toast.type}`}>
-          <div className="toast-content">
+          <div role="status" className="toast-content">
             <span className="toast-icon">
               {toast.type === 'success' && <Check size={16} style={{ color: '#10b981' }} />}
               {toast.type === 'error' && <AlertCircle size={16} style={{ color: '#ef4444' }} />}
