@@ -20,6 +20,8 @@ export function setLearnedProducts(products = []) {
 
 export function normalizeLearnedProductKey(productOrName, brand = '') {
   if (typeof productOrName === 'object' && productOrName !== null) {
+    const barcode = String(productOrName.barcode || '').replace(/\D/g, '');
+    if (barcode) return `barcode:${barcode}`;
     return `${normalizeName(productOrName.name)}|${normalizeName(productOrName.brand)}`;
   }
   return `${normalizeName(productOrName)}|${normalizeName(brand)}`;
@@ -63,11 +65,23 @@ function normalizeLearnedProduct(product, source = 'ai') {
     fat: Number(product.fat) || 0,
     carbs: Number(product.carbs) || 0,
     weight: Number(product.weight) || 100,
+    per100g: product.per100g ? {
+      calories: Number(product.per100g.calories) || 0,
+      protein: Number(product.per100g.protein) || 0,
+      fat: Number(product.per100g.fat) || 0,
+      carbs: Number(product.per100g.carbs) || 0
+    } : null,
+    nutritionBasis: product.nutritionBasis || '',
+    packageWeight: Number(product.packageWeight) || null,
+    defaultPortionGrams: Number(product.defaultPortionGrams) || null,
     ingredients: product.ingredients || '',
     icon: product.icon || '🍽️',
     barcode: product.barcode || '',
     source,
-    sourceLabel: '🧠 Збережено зі сканувань',
+    sourceLabel: product.sourceLabel || '🧠 Збережено зі сканувань',
+    dataQuality: product.dataQuality || 'unknown',
+    confidence: Number.isFinite(Number(product.confidence)) ? Number(product.confidence) : null,
+    warning: product.warning || '',
     savedAt: product.savedAt || new Date().toISOString()
   };
 }

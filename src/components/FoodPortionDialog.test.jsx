@@ -78,6 +78,30 @@ describe('FoodPortionDialog', () => {
     expect(onSave).toHaveBeenCalledExactlyOnceWith(150.5, 'Обід', false);
   });
 
+  it('uses explicit per-100g nutrition instead of package weight for an external product', () => {
+    openDialog({
+      food: {
+        id: 'off-yogurt',
+        name: 'Йогурт з OFF',
+        source: 'openfoodfacts',
+        weight: 500,
+        packageWeight: 500,
+        calories: 100,
+        protein: 5,
+        fat: 2,
+        carbs: 15,
+        per100g: { calories: 100, protein: 5, fat: 2, carbs: 15 }
+      },
+      initialWeight: 100
+    });
+
+    expect(screen.getByText('На 100 г: 100 ккал')).toBeTruthy();
+    expect(within(document.querySelector('.portion-total')).getByText('100')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Вага порції, г'), { target: { value: '200' } });
+    expect(within(document.querySelector('.portion-total')).getByText('200')).toBeTruthy();
+    expect(within(screen.getByText('Білки').parentElement).getByText('10 г')).toBeTruthy();
+  });
+
   it('preserves the selected diary date and meal while the portion changes', () => {
     const { onSave } = openDialog({ initialCategory: 'Вечеря', dateLabel: 'Учора, 5 вересня' });
     expect(screen.getByRole('dialog', { name: 'Йогурт' })).toBeTruthy();

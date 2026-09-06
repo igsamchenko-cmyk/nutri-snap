@@ -116,6 +116,15 @@ function normalizeProduct(row, index) {
   const barcode = String(getField(row, "barcode") || "").trim();
   const aliases = toAliases(getField(row, "aliases"));
   const id = String(getField(row, "id") || barcode || `import-${slug(`${brand}-${name}`)}-${index + 1}`).trim();
+  const nutrition = {};
+  for (const field of ["calories", "protein", "fat", "carbs"]) {
+    const value = toNumber(getField(row, field), null);
+    if (!Number.isFinite(value) || value < 0) return null;
+    nutrition[field] = value;
+  }
+  const weightInput = getField(row, "weight");
+  const weight = weightInput === "" ? 100 : toNumber(weightInput, null);
+  if (!Number.isFinite(weight) || weight <= 0) return null;
 
   const product = {
     id,
@@ -124,18 +133,18 @@ function normalizeProduct(row, index) {
     brand,
     supermarket,
     category,
-    calories: Math.round(toNumber(getField(row, "calories"))),
-    protein: toNumber(getField(row, "protein")),
-    fat: toNumber(getField(row, "fat")),
-    carbs: toNumber(getField(row, "carbs")),
+    calories: Math.round(nutrition.calories),
+    protein: nutrition.protein,
+    fat: nutrition.fat,
+    carbs: nutrition.carbs,
     fiber: toNumber(getField(row, "fiber"), undefined),
-    weight: Math.round(toNumber(getField(row, "weight"), 100)) || 100,
+    weight: Math.round(weight),
     icon: String(getField(row, "icon") || "🥗").trim(),
     aliases,
     ingredients: String(getField(row, "ingredients") || "").trim(),
-    confidence: 95,
     source: "ua-import",
-    sourceLabel: "Імпорт UA"
+    sourceLabel: "Імпорт UA",
+    dataQuality: "imported"
   };
 
   product.searchText = [

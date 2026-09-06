@@ -105,19 +105,23 @@ export function normalizeImportedProduct(row, index) {
   const name = String(getImportField(row, "name") || "").trim();
   if (!name) return null;
 
-  const baseWeight = Math.max(1, Math.round(numberFromImport(getImportField(row, "weight"), 100)));
+  const weightInput = getImportField(row, "weight");
+  const parsedWeight = weightInput === "" ? 100 : numberFromImport(weightInput, null);
+  if (!Number.isFinite(parsedWeight) || parsedWeight <= 0) return null;
+  const baseWeight = Math.round(parsedWeight);
   const scaleTo100 = 100 / baseWeight;
   const now = new Date().toISOString();
   const barcode = String(getImportField(row, "barcode") || "").replace(/\D/g, "");
   const brand = String(getImportField(row, "brand") || "").trim();
   const supermarket = String(getImportField(row, "supermarket") || "").trim();
   const aliases = aliasesFromImport(getImportField(row, "aliases"));
-  const nutrition = roundNutritionValues({
-    calories: numberFromImport(getImportField(row, "calories")) * scaleTo100,
-    protein: numberFromImport(getImportField(row, "protein")) * scaleTo100,
-    fat: numberFromImport(getImportField(row, "fat")) * scaleTo100,
-    carbs: numberFromImport(getImportField(row, "carbs")) * scaleTo100
-  });
+  const importedNutrition = {};
+  for (const field of ["calories", "protein", "fat", "carbs"]) {
+    const value = numberFromImport(getImportField(row, field), null);
+    if (!Number.isFinite(value) || value < 0) return null;
+    importedNutrition[field] = value * scaleTo100;
+  }
+  const nutrition = roundNutritionValues(importedNutrition);
 
   if (!nutrition) return null;
 
@@ -132,6 +136,8 @@ export function normalizeImportedProduct(row, index) {
     protein: nutrition.protein,
     fat: nutrition.fat,
     carbs: nutrition.carbs,
+    per100g: nutrition,
+    nutritionBasis: "100g",
     weight: 100,
     icon: String(getImportField(row, "icon") || "🏷️").trim(),
     aliases,
