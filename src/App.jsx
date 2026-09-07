@@ -320,6 +320,30 @@ const findBestFoodMatchByName = (foodName, foods) => {
   return bestScore >= 45 ? bestMatch : null;
 };
 
+const calculateAutomaticNutritionTargets = profile => {
+  const weight = Number(profile.weight) || 70;
+  const bmr = calculateBMR(profile.weight, profile.height, profile.age, profile.gender);
+  const tdee = Math.round(bmr * getActivityMultiplier(profile.activityLevel));
+  const targetCalories = profile.goal === 'lose'
+    ? Math.round(tdee * 0.8)
+    : profile.goal === 'gain'
+      ? Math.round(tdee * 1.15)
+      : tdee;
+  const targetProtein = Math.round(weight * (profile.goal === 'lose' ? 2 : 1.8));
+  const targetFat = Math.round(weight * 0.9);
+
+  return {
+    bmr,
+    tdee,
+    targetCalories,
+    targetProtein,
+    targetFat,
+    targetCarbs: Math.max(0, Math.round((targetCalories - targetFat * 9 - targetProtein * 4) / 4)),
+    targetWater: Math.round(weight * 33),
+    targetsMode: 'auto'
+  };
+};
+
 
 
 export default function App() {
@@ -385,7 +409,10 @@ export default function App() {
           gender: 'male',
           activityLevel: 'moderate',
           targetWater: 2100,
-          ...parsed
+          ...parsed,
+          // Старі профілі могли містити вручну введені цілі без ознаки режиму.
+          // Зберігаємо ці значення, доки користувач явно не обере автоперерахунок.
+          targetsMode: parsed.targetsMode === 'auto' ? 'auto' : 'manual'
         };
       }
     } catch (e) {
@@ -402,7 +429,8 @@ export default function App() {
       targetProtein: 150,
       targetFat: 55,
       targetCarbs: 225,
-      targetWater: 2100
+      targetWater: 2100,
+      targetsMode: 'auto'
     };
   });
 
@@ -2609,34 +2637,37 @@ export default function App() {
 
 
   const handleProfileChange = (key, value) => {
-    const updated = { ...profile, [key]: value };
-    
-    if (['goal', 'weight', 'height', 'age', 'gender', 'activityLevel'].includes(key)) {
-      const weightNum = Number(updated.weight) || 70;
-      const bmr = calculateBMR(updated.weight, updated.height, updated.age, updated.gender);
-      const tdee = Math.round(bmr * getActivityMultiplier(updated.activityLevel));
-      
-      let baseCals;
-      if (updated.goal === 'lose') {
-        baseCals = Math.round(tdee * 0.8);
-      } else if (updated.goal === 'gain') {
-        baseCals = Math.round(tdee * 1.15);
-      } else {
-        baseCals = tdee;
+    setProfile(current => {
+      const updated = { ...current, [key]: value };
+      if (!['goal', 'weight', 'height', 'age', 'gender', 'activityLevel'].includes(key)) {
+        return updated;
       }
-      
-      updated.targetCalories = baseCals;
-      updated.bmr = bmr;
-      updated.tdee = tdee;
-      updated.targetProtein = Math.round(weightNum * (updated.goal === 'lose' ? 2.0 : 1.8));
-      updated.targetFat = Math.round(weightNum * 0.9);
-      const fatCals = updated.targetFat * 9;
-      const protCals = updated.targetProtein * 4;
-      updated.targetCarbs = Math.round((baseCals - fatCals - protCals) / 4);
-      updated.targetWater = Math.round(weightNum * 33);
-    }
-    
-    setProfile(updated);
+
+      const automaticTargets = calculateAutomaticNutritionTargets(updated);
+      if (updated.targetsMode === 'manual') {
+        return {
+          ...updated,
+          bmr: automaticTargets.bmr,
+          tdee: automaticTargets.tdee,
+          targetWater: automaticTargets.targetWater
+        };
+      }
+      return { ...updated, ...automaticTargets };
+    });
+  };
+
+  const handleManualTargetChange = (key, value) => {
+    const target = Math.max(0, Number(value) || 0);
+    setProfile(current => ({
+      ...current,
+      [key]: target,
+      targetsMode: 'manual'
+    }));
+  };
+
+  const handleUseAutomaticTargets = () => {
+    setProfile(current => ({ ...current, ...calculateAutomaticNutritionTargets(current) }));
+    showToast("Цілі перераховано за даними профілю", "success");
   };
 
   const handleRecordWeight = () => {
@@ -5115,6 +5146,7 @@ export default function App() {
                     <input 
                       type="number"
                       className="settings-input"
+                      aria-label="Вага профілю, кг"
                       value={profile.weight}
                       onChange={(e) => handleProfileChange('weight', e.target.value)}
                     />
@@ -5124,6 +5156,7 @@ export default function App() {
                     <input 
                       type="number"
                       className="settings-input"
+                      aria-label="Зріст профілю, см"
                       value={profile.height}
                       onChange={(e) => handleProfileChange('height', e.target.value)}
                     />
@@ -5134,6 +5167,7 @@ export default function App() {
                   <span className="settings-label">Ваша фітнес-ціль:</span>
                   <select 
                     className="settings-input settings-select"
+                    aria-label="Фітнес-ціль"
                     value={profile.goal}
                     onChange={(e) => handleProfileChange('goal', e.target.value)}
                   >
@@ -5144,7 +5178,9 @@ export default function App() {
                 </div>
 
                 <div style={{ borderTop: '1px solid var(--border-dark)', paddingTop: '14px', marginTop: '4px' }}>
-                  <span className="settings-label">Розраховані денні нормативи:</span>
+                  <span className="settings-label">
+                    Денні нормативи - {profile.targetsMode === 'manual' ? 'власний план' : 'автоматичний розрахунок'}:
+                  </span>
                   <div className="settings-macros-calc">
                     <div className="target-pill">
                       <span style={{ color: 'var(--color-calories)', fontSize: '10px' }}>Калорії</span>
@@ -5176,18 +5212,9 @@ export default function App() {
                     <input 
                       type="number" 
                       className="settings-input" 
+                      aria-label="План калорій, ккал"
                       value={profile.targetCalories} 
-                      onChange={(e) => {
-                        const cals = Math.max(0, Number(e.target.value) || 0);
-                        // Також пропорційно скоригуємо макроси (30/25/45)
-                        setProfile(prev => ({
-                          ...prev,
-                          targetCalories: cals,
-                          targetProtein: Math.round(cals * 0.3 / 4),
-                          targetFat: Math.round(cals * 0.25 / 9),
-                          targetCarbs: Math.round(cals * 0.45 / 4)
-                        }));
-                      }}
+                      onChange={(e) => handleManualTargetChange('targetCalories', e.target.value)}
                     />
                   </div>
 
@@ -5198,20 +5225,9 @@ export default function App() {
                         type="number" 
                         className="settings-input" 
                         style={{ width: '100%', fontSize: '13px', padding: '6px', textAlign: 'center' }}
+                        aria-label="План білків, г"
                         value={profile.targetProtein} 
-                        onChange={(e) => {
-                          const p = Math.max(0, Number(e.target.value) || 0);
-                          setProfile(prev => {
-                            const newProt = p;
-                            const newFat = prev.targetFat;
-                            const newCarbs = Math.max(0, Math.round((prev.targetCalories - newProt * 4 - newFat * 9) / 4));
-                            return {
-                              ...prev,
-                              targetProtein: newProt,
-                              targetCarbs: newCarbs
-                            };
-                          });
-                        }}
+                        onChange={(e) => handleManualTargetChange('targetProtein', e.target.value)}
                       />
                     </div>
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -5220,20 +5236,9 @@ export default function App() {
                         type="number" 
                         className="settings-input" 
                         style={{ width: '100%', fontSize: '13px', padding: '6px', textAlign: 'center' }}
+                        aria-label="План жирів, г"
                         value={profile.targetFat} 
-                        onChange={(e) => {
-                          const f = Math.max(0, Number(e.target.value) || 0);
-                          setProfile(prev => {
-                            const newProt = prev.targetProtein;
-                            const newFat = f;
-                            const newCarbs = Math.max(0, Math.round((prev.targetCalories - newProt * 4 - newFat * 9) / 4));
-                            return {
-                              ...prev,
-                              targetFat: newFat,
-                              targetCarbs: newCarbs
-                            };
-                          });
-                        }}
+                        onChange={(e) => handleManualTargetChange('targetFat', e.target.value)}
                       />
                     </div>
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -5242,23 +5247,23 @@ export default function App() {
                         type="number" 
                         className="settings-input" 
                         style={{ width: '100%', fontSize: '13px', padding: '6px', textAlign: 'center' }}
+                        aria-label="План вуглеводів, г"
                         value={profile.targetCarbs} 
-                        onChange={(e) => {
-                          const c = Math.max(0, Number(e.target.value) || 0);
-                          setProfile(prev => {
-                            const newProt = prev.targetProtein;
-                            const newCarbs = c;
-                            const newFat = Math.max(0, Math.round((prev.targetCalories - newProt * 4 - newCarbs * 4) / 9));
-                            return {
-                              ...prev,
-                              targetCarbs: newCarbs,
-                              targetFat: newFat
-                            };
-                          });
-                        }}
+                        onChange={(e) => handleManualTargetChange('targetCarbs', e.target.value)}
                       />
                     </div>
                   </div>
+                  <p className="settings-info-text" style={{ marginTop: '10px' }}>
+                    Ручні значення зберігаються автоматично та не змінюють інші поля.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ width: '100%', marginTop: '10px' }}
+                    onClick={handleUseAutomaticTargets}
+                  >
+                    <RefreshCw size={16} /> Розрахувати цілі за профілем
+                  </button>
                 </div>
               </div>
             </div>
