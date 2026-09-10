@@ -224,9 +224,15 @@ const hasCompleteNutritionValues = (item) => (
   ["calories", "protein", "fat", "carbs"].every(field => Number.isFinite(Number(item?.[field])))
 );
 
-const hasFilledNutritionInputs = (...values) => (
-  values.every(value => String(value ?? '').trim() !== '' && Number.isFinite(Number(value)))
-);
+const parseNutritionInput = (value) => Number(String(value ?? '').trim().replace(',', '.'));
+
+const hasFilledNutritionInputs = (calories, protein, fat, carbs, weight) => {
+  const nutrition = [calories, protein, fat, carbs].map(parseNutritionInput);
+  const parsedWeight = parseNutritionInput(weight);
+  return nutrition.every(value => Number.isFinite(value) && value >= 0)
+    && Number.isFinite(parsedWeight)
+    && parsedWeight > 0;
+};
 
 const getFoodPortionKey = (food) => {
   if (!food) return '';
@@ -1213,7 +1219,8 @@ export default function App() {
         protein: Number(localNutritionMatch.protein),
         fat: Number(localNutritionMatch.fat),
         carbs: Number(localNutritionMatch.carbs),
-        weight: Number(localNutritionMatch.weight) || 100,
+        weight: Number(result.weight) || Number(localNutritionMatch.defaultPortionGrams) || Number(localNutritionMatch.weight) || 100,
+        nutritionBasis: "100g",
         ingredients: localNutritionMatch.ingredients || result.ingredients || '',
         dataQuality: "database_match",
         needsManualNutrition: false,
@@ -1685,11 +1692,11 @@ export default function App() {
       return;
     }
 
-    const kcalVal = Number(customFoodCalories) || 0;
-    const proteinVal = Number(customFoodProtein) || 0;
-    const fatVal = Number(customFoodFat) || 0;
-    const carbsVal = Number(customFoodCarbs) || 0;
-    const defaultWeightVal = Number(customFoodWeight) || 100;
+    const kcalVal = parseNutritionInput(customFoodCalories);
+    const proteinVal = parseNutritionInput(customFoodProtein);
+    const fatVal = parseNutritionInput(customFoodFat);
+    const carbsVal = parseNutritionInput(customFoodCarbs);
+    const defaultWeightVal = parseNutritionInput(customFoodWeight);
 
     const scaleTo100 = defaultWeightVal > 0 ? (100 / defaultWeightVal) : 1;
     const normalizedNutrition = roundNutritionValues({
@@ -1697,12 +1704,11 @@ export default function App() {
       protein: proteinVal * scaleTo100,
       fat: fatVal * scaleTo100,
       carbs: carbsVal * scaleTo100
-    }) || {
-      calories: 0,
-      protein: 0,
-      fat: 0,
-      carbs: 0
-    };
+    });
+    if (!normalizedNutrition) {
+      showToast("Не вдалося нормалізувати КБЖВ. Перевірте введені значення.", "error");
+      return;
+    }
     const now = new Date().toISOString();
     const legacyCustomFood = {
       name: customFoodName.trim(),
@@ -2540,10 +2546,22 @@ export default function App() {
 
         const newCals = Math.round(calculateCaloriesFromMacros(pVal, fVal, cVal) ?? 0);
         const nextTotals = { calories: newCals, protein: pVal, fat: fVal, carbs: cVal };
+        const servingGrams = Number(meal.servingGrams ?? meal.weight) || 100;
+        const nextPer100g = roundNutritionValues({
+          calories: newCals * 100 / servingGrams,
+          protein: pVal * 100 / servingGrams,
+          fat: fVal * 100 / servingGrams,
+          carbs: cVal * 100 / servingGrams
+        });
 
         return {
           ...meal,
-          ...(meal.totals ? { totals: nextTotals } : {}),
+          totals: nextTotals,
+          servingGrams,
+          per100g: nextPer100g,
+          ...(meal.foodSnapshot ? {
+            foodSnapshot: { ...meal.foodSnapshot, per100g: nextPer100g }
+          } : {}),
           protein: p,
           fat: f,
           carbs: c,

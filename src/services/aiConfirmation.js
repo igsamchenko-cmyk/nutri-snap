@@ -17,18 +17,65 @@ function parsePositiveFiniteNumber(value) {
   return number !== null && number > 0 ? number : null;
 }
 
+function parseNutritionValues(source = {}) {
+  const nutrition = {
+    calories: parseFiniteNumber(source.calories),
+    protein: parseFiniteNumber(source.protein),
+    fat: parseFiniteNumber(source.fat),
+    carbs: parseFiniteNumber(source.carbs)
+  };
+
+  if (Object.values(nutrition).some(value => value === null || value < 0)) return null;
+  return nutrition;
+}
+
+function getNutritionValues(source = {}) {
+  const nutrition = parseNutritionValues(source);
+  return nutrition ? roundNutritionValues(nutrition) : null;
+}
+
+function getSourceNutritionBasis(source = {}) {
+  if (source.nutritionBasis === '100g' || source.nutritionBasis === 'serving') {
+    return source.nutritionBasis;
+  }
+  return source.dataQuality === 'label_read' ? '100g' : 'serving';
+}
+
+function getPer100gNutrition(source = {}, weight, sourceBasis) {
+  const nutrition = getNutritionValues(source);
+  if (!nutrition || !weight) return null;
+  if (sourceBasis === '100g') return nutrition;
+
+  return roundNutritionValues({
+    calories: nutrition.calories * 100 / weight,
+    protein: nutrition.protein * 100 / weight,
+    fat: nutrition.fat * 100 / weight,
+    carbs: nutrition.carbs * 100 / weight
+  });
+}
+
 export function createAiConfirmationDraft(result = {}, overrides = {}) {
   const source = { ...result, ...overrides };
   const confidence = parseFiniteNumber(source.confidence);
+  const weight = parseFiniteNumber(source.weight) ?? DEFAULT_CONFIRMATION_WEIGHT;
+  const sourceNutritionBasis = getSourceNutritionBasis(source);
+  const inputNutrition = parseNutritionValues(source);
+  const per100g = getPer100gNutrition(source, parsePositiveFiniteNumber(weight), sourceNutritionBasis);
+  const servingNutrition = sourceNutritionBasis === '100g' && per100g && weight > 0
+    ? scaleNutritionPer100g(per100g, weight)
+    : inputNutrition;
 
   const draft = {
     ...source,
     name: typeof source.name === 'string' ? source.name.trim() : '',
-    calories: parseFiniteNumber(source.calories),
-    protein: parseFiniteNumber(source.protein),
-    fat: parseFiniteNumber(source.fat),
-    carbs: parseFiniteNumber(source.carbs),
-    weight: parseFiniteNumber(source.weight) ?? DEFAULT_CONFIRMATION_WEIGHT,
+    calories: servingNutrition?.calories ?? parseFiniteNumber(source.calories),
+    protein: servingNutrition?.protein ?? parseFiniteNumber(source.protein),
+    fat: servingNutrition?.fat ?? parseFiniteNumber(source.fat),
+    carbs: servingNutrition?.carbs ?? parseFiniteNumber(source.carbs),
+    weight,
+    nutritionBasis: 'serving',
+    sourceNutritionBasis: source.sourceNutritionBasis || sourceNutritionBasis,
+    per100g,
     dataQuality: source.dataQuality || 'estimate',
     needsManualNutrition: Boolean(source.needsManualNutrition)
   };
@@ -48,24 +95,12 @@ export function scaleAiConfirmationDraftByWeight(sourceResult, nextWeight) {
 
   if (targetWeight === null || targetWeight < 0) return null;
 
-  const baselineNutrition = roundNutritionValues({
-    calories: parseFiniteNumber(sourceResult?.calories) ?? 0,
-    protein: parseFiniteNumber(sourceResult?.protein) ?? 0,
-    fat: parseFiniteNumber(sourceResult?.fat) ?? 0,
-    carbs: parseFiniteNumber(sourceResult?.carbs) ?? 0
-  });
-
-  if (!baselineNutrition) return null;
-
-  // Technical debt: AI photo results are currently portion totals, not canonical per-100g values.
-  // For the confirmation card we derive a temporary per-100g baseline from the initial portion.
-  const scaleTo100g = 100 / baselineWeight;
-  const per100g = roundNutritionValues({
-    calories: baselineNutrition.calories * scaleTo100g,
-    protein: baselineNutrition.protein * scaleTo100g,
-    fat: baselineNutrition.fat * scaleTo100g,
-    carbs: baselineNutrition.carbs * scaleTo100g
-  });
+  const storedPer100g = getNutritionValues(sourceResult?.per100g);
+  const per100g = storedPer100g || getPer100gNutrition(
+    sourceResult,
+    baselineWeight,
+    getSourceNutritionBasis(sourceResult)
+  );
 
   if (!per100g) return null;
 

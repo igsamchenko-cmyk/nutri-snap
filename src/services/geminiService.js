@@ -28,13 +28,14 @@ const FOOD_SCAN_SCHEMA = {
     fat: { type: 'number', nullable: true },
     carbs: { type: 'number', nullable: true },
     weight: { type: 'integer' },
+    nutritionBasis: { type: 'string', enum: ['serving', '100g'] },
     confidence: { type: 'integer' },
     ingredients: { type: 'string' },
     dataQuality: { type: 'string', enum: ['estimate', 'label_read', 'insufficient'] },
     needsManualNutrition: { type: 'boolean' },
     warning: { type: 'string' }
   },
-  required: ['name', 'calories', 'protein', 'fat', 'carbs', 'weight', 'confidence', 'ingredients', 'dataQuality', 'needsManualNutrition', 'warning']
+  required: ['name', 'calories', 'protein', 'fat', 'carbs', 'weight', 'nutritionBasis', 'confidence', 'ingredients', 'dataQuality', 'needsManualNutrition', 'warning']
 };
 
 const PACKAGING_SCHEMA = {
@@ -132,7 +133,7 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
     Required task:
     - identify the main dish/product and visible components;
     - estimate total serving weight in grams;
-    - estimate calories/protein/fat/carbs for the whole serving;
+    - for prepared food, estimate calories/protein/fat/carbs for the whole serving and set nutritionBasis "serving";
     - confidence must be 0-99; lower it when uncertain and explain in warning;
     - dataQuality must be "estimate", "label_read", or "insufficient";
     - needsManualNutrition must be true when nutrition cannot be estimated or read reliably.
@@ -140,11 +141,11 @@ export async function analyzeFoodImage(base64Data, apiKey, modelName = 'gemini-2
     Rules:
     - For normal prepared food, give the best approximate estimate; do not provide medical advice.
     - Calories should roughly match macros: protein*4 + carbs*4 + fat*9.
-    - If this is packaging and the nutrition table is clearly readable, read values per 100 g and use dataQuality "label_read".
+    - If this is packaging and the nutrition table is clearly readable, read values per 100 g, set nutritionBasis "100g", and use dataQuality "label_read".
     - If packaging/label is unclear, do not invent nutrition: calories/protein/fat/carbs null, confidence <=45, dataQuality "insufficient", needsManualNutrition true.
     - Do not use generic brand knowledge as exact label data.
 
-    Required JSON fields: name, calories, protein, fat, carbs, weight, confidence, ingredients, dataQuality, needsManualNutrition, warning.
+    Required JSON fields: name, calories, protein, fat, carbs, weight, nutritionBasis, confidence, ingredients, dataQuality, needsManualNutrition, warning.
   `;
   const payload = {
     contents: [

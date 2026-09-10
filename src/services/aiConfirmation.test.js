@@ -46,6 +46,37 @@ describe('AI Confirmation Services', () => {
     });
   });
 
+  it('should convert label values per 100g to the confirmed package portion', () => {
+    const draft = createAiConfirmationDraft({
+      name: 'Granola label',
+      calories: 400,
+      protein: 10,
+      fat: 12,
+      carbs: 63,
+      weight: 500,
+      nutritionBasis: '100g',
+      dataQuality: 'label_read'
+    });
+
+    expect(draft).toMatchObject({
+      calories: 2000,
+      protein: 50,
+      fat: 60,
+      carbs: 315,
+      weight: 500,
+      nutritionBasis: 'serving',
+      sourceNutritionBasis: '100g',
+      per100g: { calories: 400, protein: 10, fat: 12, carbs: 63 }
+    });
+    expect(scaleAiConfirmationDraftByWeight(draft, 100)).toEqual({
+      calories: 400,
+      protein: 10,
+      fat: 12,
+      carbs: 63,
+      weight: 100
+    });
+  });
+
   it('should validate a corrected draft before saving', () => {
     const validation = validateAiConfirmationDraft({
       ...validDraft,

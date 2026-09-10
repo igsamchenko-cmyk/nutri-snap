@@ -30,6 +30,7 @@ const FOOD_SCAN_SCHEMA = {
     fat: { type: ['number', 'null'] },
     carbs: { type: ['number', 'null'] },
     weight: { type: 'number' },
+    nutritionBasis: { type: 'string', enum: ['serving', '100g'] },
     confidence: { type: 'number' },
     ingredients: { type: 'string' },
     dataQuality: { type: 'string', enum: ['estimate', 'label_read', 'insufficient'] },
@@ -43,6 +44,7 @@ const FOOD_SCAN_SCHEMA = {
     'fat',
     'carbs',
     'weight',
+    'nutritionBasis',
     'confidence',
     'ingredients',
     'dataQuality',
@@ -247,8 +249,9 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
 
     Правила точності:
     - Якщо це готова страва без етикетки, дай приблизну оцінку ваги та КБЖВ.
+      Значення КБЖВ мають стосуватися всієї вказаної ваги, nutritionBasis має бути "serving".
     - Якщо це упаковка, але таблиця харчової цінності нечітка, не вигадуй КБЖВ: calories/protein/fat/carbs мають бути null, dataQuality "insufficient", needsManualNutrition true.
-    - Якщо таблиця харчової цінності чітко читається, зчитай КБЖВ з етикетки, встанови dataQuality "label_read".
+    - Якщо таблиця харчової цінності чітко читається, зчитай КБЖВ на 100 г, встанови nutritionBasis "100g" і dataQuality "label_read".
     - Не використовуй загальні знання бренду як точні дані конкретної упаковки.
     - Поверни тільки дані, які відповідають JSON Schema.
   `;

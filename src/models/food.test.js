@@ -477,6 +477,33 @@ describe('Food and Meal Models', () => {
     expect(favorite.foodSnapshot).not.toBe(originalSnapshot);
   });
 
+  it('should preserve corrected meal nutrition when saving and reusing a favorite', () => {
+    const meal = createMealEntryFromFoodItem(
+      createFoodItem({
+        name: 'Corrected porridge',
+        source: 'manual',
+        per100g: { calories: 100, protein: 3, fat: 2, carbs: 18 }
+      }),
+      200,
+      { id: 'corrected-meal', date: '2026-06-20', category: 'Breakfast' }
+    );
+    const corrected = {
+      ...meal,
+      totals: { calories: 300, protein: 12, fat: 8, carbs: 45 },
+      calories: 300,
+      protein: 12,
+      fat: 8,
+      carbs: 45
+    };
+
+    const favorite = createFavoriteFromMealEntry(corrected);
+    const reused = createMealEntryFromFavorite(favorite, { weight: 100 });
+
+    expect(favorite.per100g).toEqual({ calories: 150, protein: 6, fat: 4, carbs: 22.5 });
+    expect(favorite.foodSnapshot.per100g).toEqual(favorite.per100g);
+    expect(reused.totals).toEqual({ calories: 150, protein: 6, fat: 4, carbs: 22.5 });
+  });
+
   it('should normalize favorite arrays and keep normalized favorites compatible with MealEntry creation', () => {
     const favorites = normalizeFavoriteFoods([
       { name: 'Legacy favorite', calories: 120, protein: 8, fat: 4, carbs: 12, weight: 100 },
