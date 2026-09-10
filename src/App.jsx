@@ -2891,9 +2891,15 @@ export default function App() {
         throw new Error("У файлі немає продуктів з повними КБЖВ.");
       }
 
-      mergeLearnedProducts(completeProducts);
+      const mergedProducts = mergeLearnedProducts(completeProducts);
       refreshLearnedProducts();
-      showToast(`Імпортовано ${completeProducts.length} продуктів`, "success");
+      const wasLimited = completeProducts.length > MAX_LEARNED_PRODUCTS;
+      showToast(
+        wasLimited
+          ? 'Локальна база вміщує ' + MAX_LEARNED_PRODUCTS + ' продуктів. Збережено найновіші записи.'
+          : 'Локальна база оновлена: збережено ' + mergedProducts.length + ' продуктів.',
+        wasLimited ? "warning" : "success"
+      );
     } catch (error) {
       console.error("Shared product database import error:", error);
       showToast(`Не вдалося імпортувати базу продуктів: ${error.message}`, "error");
@@ -6222,7 +6228,7 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.5.6 (Typography Polish)</p>
+              <p>NutriSnap v1.6.0</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
                 onClick={async () => {

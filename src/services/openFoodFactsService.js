@@ -1,7 +1,7 @@
 import { fetchJsonWithAbortTimeout } from "../utils/requestTimeout.js";
 
 const API_BASE = "https://world.openfoodfacts.org";
-const APP_PARAMS = "app_name=NutriSnap&app_version=1.3.0";
+const APP_PARAMS = "app_name=NutriSnap&app_version=1.6.0";
 const SEARCH_PAGE_SIZE = 40;
 const CACHE_DB_NAME = "nutrisnap-product-database";
 const CACHE_DB_VERSION = 1;
@@ -411,7 +411,7 @@ function buildSearchUrl(query, { ukrainianOnly }) {
     lc: "uk",
     cc: "ua",
     app_name: "NutriSnap",
-    app_version: "1.3.0"
+    app_version: "1.6.0"
   });
 
   if (ukrainianOnly) {
