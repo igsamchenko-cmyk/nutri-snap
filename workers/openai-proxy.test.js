@@ -38,12 +38,10 @@ function createBody(overrides = {}) {
 function createEnv(success = true) {
   return {
     OPENAI_API_KEY: 'secret',
-    RATE_LIMIT: {
-      get: vi.fn().mockResolvedValue('0'),
-      put: vi.fn().mockResolvedValue(undefined)
+    AI_RATE_LIMITER: {
+      limit: vi.fn().mockResolvedValue({ success })
     },
-    ALLOWED_ORIGIN: origin,
-    rateLimitSuccess: success
+    ALLOWED_ORIGIN: origin
   };
 }
 
@@ -72,7 +70,32 @@ describe('OpenAI proxy', () => {
     expect(forwarded.max_output_tokens).toBe(2000);
     expect(forwarded).not.toHaveProperty('tools');
     expect(forwarded).not.toHaveProperty('store');
-    expect(env.RATE_LIMIT.put).toHaveBeenCalledTimes(1);
+    expect(env.AI_RATE_LIMITER.limit).toHaveBeenCalledWith({ key: '203.0.113.10' });
+  });
+
+  it('returns 429 without contacting OpenAI when the rate limit is exceeded', async () => {
+    const env = createEnv(false);
+    const upstreamFetch = vi.fn();
+    vi.stubGlobal('fetch', upstreamFetch);
+
+    const response = await worker.fetch(createRequest(createBody()), env);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('60');
+    expect(env.AI_RATE_LIMITER.limit).toHaveBeenCalledWith({ key: '203.0.113.10' });
+    expect(upstreamFetch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the rate limiter binding is missing', async () => {
+    const env = createEnv();
+    delete env.AI_RATE_LIMITER;
+    const upstreamFetch = vi.fn();
+    vi.stubGlobal('fetch', upstreamFetch);
+
+    const response = await worker.fetch(createRequest(createBody()), env);
+
+    expect(response.status).toBe(503);
+    expect(upstreamFetch).not.toHaveBeenCalled();
   });
 
   it('rejects remote image URLs', async () => {
@@ -98,9 +121,11 @@ describe('OpenAI proxy', () => {
     const upstreamFetch = vi.fn();
     vi.stubGlobal('fetch', upstreamFetch);
 
-    const response = await worker.fetch(request, createEnv());
+    const env = createEnv();
+    const response = await worker.fetch(request, env);
 
     expect(response.status).toBe(403);
+    expect(env.AI_RATE_LIMITER.limit).not.toHaveBeenCalled();
     expect(upstreamFetch).not.toHaveBeenCalled();
   });
 });

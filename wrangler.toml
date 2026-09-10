@@ -6,6 +6,10 @@ workers_dev = true
 [vars]
 ALLOWED_ORIGIN = "https://igsamchenko-cmyk.github.io"
 
-[[kv_namespaces]]
-binding = "RATE_LIMIT"
-id = "fbe38d1a4e14402a8ecdc361c6c7ae66"
+[[ratelimits]]
+name = "AI_RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 10
+  period = 60
