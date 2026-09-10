@@ -414,22 +414,22 @@ export default function App() {
       const saved = localStorage.getItem('nutrisnap_profile');
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Міграція: додати нові поля якщо їх немає
-        return {
+        const migratedProfile = {
           age: 25,
           gender: 'male',
           activityLevel: 'moderate',
           targetWater: 2100,
           ...parsed,
-          // Старі профілі могли містити вручну введені цілі без ознаки режиму.
-          // Зберігаємо ці значення, доки користувач явно не обере автоперерахунок.
           targetsMode: parsed.targetsMode === 'auto' ? 'auto' : 'manual'
         };
+        return migratedProfile.targetsMode === 'auto'
+          ? { ...migratedProfile, ...calculateAutomaticNutritionTargets(migratedProfile) }
+          : migratedProfile;
       }
     } catch (e) {
       console.error("Error reading nutrisnap_profile:", e);
     }
-    return {
+    const defaultProfile = {
       weight: 70,
       height: 170,
       age: 25,
@@ -443,6 +443,7 @@ export default function App() {
       targetWater: 2100,
       targetsMode: 'auto'
     };
+    return { ...defaultProfile, ...calculateAutomaticNutritionTargets(defaultProfile) };
   });
 
   const [weightInput, setWeightInput] = useState(profile.weight || '');
@@ -2718,7 +2719,10 @@ export default function App() {
     }));
     
     if (window.confirm("Бажаєте автоматично перерахувати цілі калорійності та макросів на основі нової ваги?")) {
-      handleProfileChange('weight', weightNum);
+      setProfile(current => {
+        const updated = { ...current, weight: weightNum };
+        return { ...updated, ...calculateAutomaticNutritionTargets(updated) };
+      });
     } else {
       setProfile(prev => ({ ...prev, weight: weightNum }));
     }
@@ -4598,7 +4602,7 @@ export default function App() {
                             className="search-food-item"
                             role="button"
                             tabIndex={0}
-                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSearchFood(food); } }}
+                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.currentTarget.click(); } }}
                             style={{ borderLeft: `4px solid ${borderCol}` }}
                             onClick={() => {
                               openCustomFoodForm({
@@ -4631,7 +4635,7 @@ export default function App() {
                           className="search-food-item"
                             role="button"
                             tabIndex={0}
-                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSearchFood(food); } }}
+                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.currentTarget.click(); } }}
                           style={{ borderLeft: '3px solid var(--color-water)' }}
                           onClick={() => {
                             setCustomFoodName(food.name);
@@ -5231,6 +5235,49 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="profile-grid-2col">
+                  <div className="settings-row">
+                    <span className="settings-label">Ваш вік:</span>
+                    <input
+                      type="number"
+                      min="14"
+                      max="100"
+                      className="settings-input"
+                      aria-label="Вік профілю"
+                      value={profile.age}
+                      onChange={(e) => handleProfileChange('age', e.target.value)}
+                    />
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">Стать для формули:</span>
+                    <select
+                      className="settings-input settings-select"
+                      aria-label="Стать для розрахунку"
+                      value={profile.gender}
+                      onChange={(e) => handleProfileChange('gender', e.target.value)}
+                    >
+                      <option value="female">Жіноча</option>
+                      <option value="male">Чоловіча</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Рівень активності:</span>
+                  <select
+                    className="settings-input settings-select"
+                    aria-label="Рівень активності"
+                    value={profile.activityLevel}
+                    onChange={(e) => handleProfileChange('activityLevel', e.target.value)}
+                  >
+                    <option value="sedentary">Мінімальна активність</option>
+                    <option value="light">Легка активність</option>
+                    <option value="moderate">Помірна активність</option>
+                    <option value="active">Висока активність</option>
+                    <option value="veryActive">Дуже висока активність</option>
+                  </select>
+                </div>
+
                 <div className="settings-row">
                   <span className="settings-label">Ваша фітнес-ціль:</span>
                   <select 
@@ -5353,6 +5400,7 @@ export default function App() {
                       type="number"
                       step="0.1"
                       className="settings-input"
+                      aria-label="Вага для запису, кг"
                       style={{ width: '100%' }}
                       value={weightInput}
                       onChange={(e) => setWeightInput(e.target.value)}
