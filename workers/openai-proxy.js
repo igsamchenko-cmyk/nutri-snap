@@ -5,10 +5,6 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://127.0.0.1:5180'
 ];
 
-// Rate limit: MAX_REQUESTS per IP per WINDOW_SECONDS
-const MAX_REQUESTS = 30;
-const WINDOW_SECONDS = 3600; // 1 година
-
 export default {
   async fetch(request, env) {
     const corsHeaders = getCorsHeaders(request, env);
@@ -39,26 +35,23 @@ export default {
       return jsonResponse({ error: { message: 'OPENAI_API_KEY is not configured' } }, 500, corsHeaders);
     }
 
-    // ── Rate limiting via Workers KV ─────────────────────────────────────────
-    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-    const windowKey = Math.floor(Date.now() / 1000 / WINDOW_SECONDS);
-    const kvKey = `rl:${windowKey}:${ip}`;
-
-    if (env.RATE_LIMIT) {
-      const count = parseInt(await env.RATE_LIMIT.get(kvKey), 10) || 0;
-
-      if (count >= MAX_REQUESTS) {
-        const retryAfter = WINDOW_SECONDS - (Math.floor(Date.now() / 1000) % WINDOW_SECONDS);
-        return jsonResponse(
-          { error: { message: `Перевищено ліміт: ${MAX_REQUESTS} запитів/годину. Спробуйте через ${Math.ceil(retryAfter / 60)} хв.` } },
-          429,
-          { ...corsHeaders, 'Retry-After': String(retryAfter) }
-        );
-      }
-
-      await env.RATE_LIMIT.put(kvKey, String(count + 1), { expirationTtl: WINDOW_SECONDS + 60 });
+    if (!env.AI_RATE_LIMITER?.limit) {
+      return jsonResponse(
+        { error: { message: 'Rate limiter is not configured' } },
+        503,
+        corsHeaders
+      );
     }
-    // ────────────────────────────────────────────────────────────────────────
+
+    const clientKey = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const { success } = await env.AI_RATE_LIMITER.limit({ key: clientKey });
+    if (!success) {
+      return jsonResponse(
+        { error: { message: 'Забагато AI-запитів. Спробуйте через хвилину.' } },
+        429,
+        { ...corsHeaders, 'Retry-After': '60' }
+      );
+    }
 
     try {
       const body = await request.text();
