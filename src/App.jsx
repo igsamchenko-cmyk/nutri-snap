@@ -6225,25 +6225,25 @@ export default function App() {
               <p>NutriSnap v1.5.6 (Typography Polish)</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if ('serviceWorker' in navigator) {
-                    navigator.serviceWorker.getRegistrations().then((registrations) => {
-                      for (let registration of registrations) {
-                        registration.unregister();
-                      }
-                      if ('caches' in window) {
-                        caches.keys().then((names) => {
-                          Promise.all(names.map(name => caches.delete(name))).then(() => {
-                            window.location.reload(true);
-                          });
-                        });
-                      } else {
-                        window.location.reload(true);
-                      }
-                    });
-                  } else {
-                    window.location.reload(true);
+                    const appScope = new URL(import.meta.env.BASE_URL, window.location.origin).href;
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(
+                      registrations
+                        .filter(registration => registration.scope.startsWith(appScope))
+                        .map(registration => registration.unregister())
+                    );
                   }
+                  if ('caches' in window) {
+                    const names = await caches.keys();
+                    await Promise.all(
+                      names
+                        .filter(name => name.startsWith('nutrisnap-cache-'))
+                        .map(name => caches.delete(name))
+                    );
+                  }
+                  window.location.reload();
                 }}
                 style={{
                   background: 'rgba(239, 68, 68, 0.1)',
