@@ -1,4 +1,4 @@
-import { fetchJsonWithAbortTimeout } from "../utils/requestTimeout.js";
+import { fetchWithAbortTimeout } from "../utils/requestTimeout.js";
 
 const API_BASE = "https://world.openfoodfacts.org";
 const APP_PARAMS = "app_name=NutriSnap&app_version=1.6.0";
@@ -205,7 +205,10 @@ function normalizeProduct(product) {
     ingredients: ingredients ? cleanText(ingredients) : null,
     source: "openfoodfacts",
     sourceLabel: supermarket ? `${supermarket} / OFF` : "Open Food Facts",
+    sourceUrl: barcode ? `https://world.openfoodfacts.org/product/${barcode}` : "https://world.openfoodfacts.org",
     dataQuality: "database",
+    confidence: null,
+    warning: "Дані взято з Open Food Facts. Перед додаванням звірте КБЖВ з етикеткою.",
     cachedAt: Date.now(),
     searchText: normalizeText([
       fullName,
@@ -308,6 +311,14 @@ async function searchCachedProducts(query) {
     .slice(0, MAX_CACHED_SEARCH_RESULTS);
 }
 
+export async function searchCachedProductsByName(query) {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) return [];
+
+  const cachedProducts = await searchCachedProducts(cleanQuery);
+  return rankProducts(cachedProducts, cleanQuery).slice(0, MAX_CACHED_SEARCH_RESULTS);
+}
+
 async function getCachedProductByBarcode(barcode) {
   const cleanBarcode = barcode.trim();
   if (!cleanBarcode) return null;
@@ -383,7 +394,7 @@ function rankProducts(products, query) {
 }
 
 async function fetchJson(url) {
-  const { response, data } = await fetchJsonWithAbortTimeout(url, {
+  const response = await fetchWithAbortTimeout(url, {
     headers: {
       Accept: "application/json"
     }
@@ -396,7 +407,12 @@ async function fetchJson(url) {
     throw new Error(`Open Food Facts request failed with status ${response.status}`);
   }
 
-  return data;
+  const contentType = response.headers?.get?.("content-type");
+  if (contentType && !contentType.toLowerCase().includes("json")) {
+    throw new Error("Open Food Facts returned a non-JSON response");
+  }
+
+  return response.json();
 }
 
 function buildSearchUrl(query, { ukrainianOnly }) {
@@ -475,6 +491,9 @@ export async function searchProductsByName(query) {
     return rankProducts(dedupeProducts([...remoteProducts, ...cachedProducts]), cleanQuery).slice(0, MAX_CACHED_SEARCH_RESULTS);
   } catch (e) {
     console.error("Error searching products in Open Food Facts:", e);
-    return rankProducts(cachedProducts, cleanQuery);
+    if (cachedProducts.length > 0) {
+      return rankProducts(cachedProducts, cleanQuery);
+    }
+    throw e;
   }
 }

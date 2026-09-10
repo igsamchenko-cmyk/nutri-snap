@@ -2,9 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import App from './App';
+import {
+  searchCachedProductsByName,
+  searchProductsByName
+} from './services/openFoodFactsService';
 
 vi.mock('./services/openFoodFactsService', () => ({
   getProductByBarcode: vi.fn().mockResolvedValue(null),
+  searchCachedProductsByName: vi.fn().mockResolvedValue([]),
   searchProductsByName: vi.fn().mockResolvedValue([])
 }));
 
@@ -17,6 +22,9 @@ const selectFirstFood = container => {
 };
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  searchCachedProductsByName.mockResolvedValue([]);
+  searchProductsByName.mockResolvedValue([]);
   const values = new Map();
   vi.stubGlobal('localStorage', {
     getItem: key => values.get(key) ?? null,
@@ -37,6 +45,49 @@ afterEach(() => {
 });
 
 describe('diary food entry', () => {
+  it('uses complete nutrition returned by explicit Open Food Facts search', async () => {
+    searchProductsByName.mockResolvedValue([{
+      id: 'off-4820000000004',
+      barcode: '4820000000004',
+      name: 'Тест - Кефір 2,5%',
+      brand: 'Тест',
+      calories: 50,
+      protein: 3,
+      fat: 2.5,
+      carbs: 4,
+      per100g: { calories: 50, protein: 3, fat: 2.5, carbs: 4 },
+      nutritionBasis: '100g',
+      weight: 100,
+      source: 'openfoodfacts',
+      sourceLabel: 'Open Food Facts',
+      dataQuality: 'database'
+    }]);
+
+    const { container } = render(<App />);
+    fireEvent.click(container.querySelector('.scan-fab'));
+    fireEvent.change(screen.getByLabelText('Пошук продуктів'), { target: { value: 'кефір тест' } });
+
+    await waitFor(() => expect(searchCachedProductsByName).toHaveBeenCalledWith('кефір тест'));
+    expect(searchProductsByName).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Знайти у великій базі продуктів' }));
+    await waitFor(() => expect(searchProductsByName).toHaveBeenCalledWith('кефір тест'));
+
+    fireEvent.click(screen.getByText('Тест - Кефір 2,5%').closest('.search-food-item'));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Додати й завершити' }));
+
+    await waitFor(() => expect(readMeals()).toHaveLength(1));
+    expect(readMeals()[0]).toMatchObject({
+      name: 'Тест - Кефір 2,5%',
+      calories: 50,
+      protein: 3,
+      fat: 2.5,
+      carbs: 4,
+      source: 'barcode_off'
+    });
+  });
+
   it('adds actual selected foods to lunch and keeps the date and category when adding another', async () => {
     const { container } = render(<App />);
     fireEvent.change(screen.getByLabelText('Дата щоденника'), { target: { value: '2026-08-20' } });

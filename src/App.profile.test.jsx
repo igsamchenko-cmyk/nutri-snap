@@ -5,6 +5,7 @@ import App from './App';
 
 vi.mock('./services/openFoodFactsService', () => ({
   getProductByBarcode: vi.fn().mockResolvedValue(null),
+  searchCachedProductsByName: vi.fn().mockResolvedValue([]),
   searchProductsByName: vi.fn().mockResolvedValue([])
 }));
 
