@@ -1,3 +1,5 @@
+import { fetchJsonWithAbortTimeout } from "../utils/requestTimeout.js";
+
 const API_BASE = "https://world.openfoodfacts.org";
 const APP_PARAMS = "app_name=NutriSnap&app_version=1.3.0";
 const SEARCH_PAGE_SIZE = 40;
@@ -6,6 +8,7 @@ const CACHE_DB_VERSION = 1;
 const CACHE_STORE = "products";
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const MAX_CACHED_SEARCH_RESULTS = 80;
+const REQUEST_TIMEOUT_MS = 15000;
 
 const PRODUCT_FIELDS = [
   "code",
@@ -20,6 +23,9 @@ const PRODUCT_FIELDS = [
   "stores",
   "stores_tags",
   "quantity",
+  "serving_quantity",
+  "serving_size",
+  "nutrition_data_per",
   "image_front_url",
   "image_url",
   "ingredients_text",
@@ -75,21 +81,24 @@ function roundMacro(value) {
   return Math.round(toNumber(value) * 10) / 10;
 }
 
-function parseQuantityToGrams(quantity) {
-  if (!quantity) return 100;
+function parsePackageQuantity(quantity) {
+  if (!quantity) return { packageWeight: null, packageVolumeMl: null };
 
-  const match = String(quantity).match(/([\d.,]+)\s*(kg|кг|g|гр|г|ml|мл|l|л)\b/i);
-  if (!match) return 100;
+  const match = String(quantity).match(/([\d.,]+)\s*(kg|кг|g|гр|г|ml|мл|l|л)(?![\p{L}])/iu);
+  if (!match) return { packageWeight: null, packageVolumeMl: null };
 
   let value = parseFloat(match[1].replace(",", "."));
-  if (!Number.isFinite(value) || value <= 0) return 100;
+  if (!Number.isFinite(value) || value <= 0) return { packageWeight: null, packageVolumeMl: null };
 
   const unit = match[2].toLowerCase();
   if (unit === "kg" || unit === "кг" || unit === "l" || unit === "л") {
     value *= 1000;
   }
 
-  return Math.round(value) || 100;
+  const roundedValue = Math.round(value);
+  return unit === "ml" || unit === "мл" || unit === "l" || unit === "л"
+    ? { packageWeight: null, packageVolumeMl: roundedValue }
+    : { packageWeight: roundedValue, packageVolumeMl: null };
 }
 
 function detectSupermarket(product) {
@@ -110,19 +119,39 @@ function detectSupermarket(product) {
   return "";
 }
 
-function hasCompleteNutrition(nutriments) {
-  if (!nutriments) return false;
+function readCompleteNutrition(nutriments, suffix = "") {
+  if (!nutriments) return null;
+  const fields = {
+    calories: "energy-kcal" + suffix,
+    protein: "proteins" + suffix,
+    fat: "fat" + suffix,
+    carbs: "carbohydrates" + suffix
+  };
+  const values = Object.fromEntries(
+    Object.entries(fields).map(([key, field]) => [key, Number(nutriments[field])])
+  );
+  return Object.values(values).every(Number.isFinite) ? values : null;
+}
 
-  const hasValue = (...keys) => keys.some(key => {
-    const value = nutriments[key];
-    return value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value));
-  });
+function getNutritionPer100g(product) {
+  const direct = readCompleteNutrition(product.nutriments, "_100g");
+  if (direct) return direct;
 
-  return (
-    hasValue("energy-kcal_100g", "energy-kcal") &&
-    hasValue("proteins_100g", "proteins") &&
-    hasValue("fat_100g", "fat") &&
-    hasValue("carbohydrates_100g", "carbohydrates")
+  const unqualified = readCompleteNutrition(product.nutriments);
+  const basis = normalizeText(product.nutrition_data_per);
+  if (!unqualified || !basis) return null;
+  if (basis === "100g" || basis === "100 g") return unqualified;
+  if (basis !== "serving") return null;
+
+  const servingQuantity = Number(product.serving_quantity);
+  const parsedServing = parsePackageQuantity(product.serving_size);
+  const servingGrams = Number.isFinite(servingQuantity) && servingQuantity > 0
+    ? servingQuantity
+    : parsedServing.packageWeight;
+  if (!servingGrams) return null;
+
+  return Object.fromEntries(
+    Object.entries(unqualified).map(([key, value]) => [key, value * 100 / servingGrams])
   );
 }
 
@@ -139,15 +168,16 @@ function normalizeProduct(product) {
   if (!name) return null;
 
   const brand = getPrimaryBrand(product);
-  const nutriments = product.nutriments || {};
-  if (!hasCompleteNutrition(nutriments)) return null;
+  const nutrition = getNutritionPer100g(product);
+  if (!nutrition) return null;
 
-  const calories = Math.round(toNumber(nutriments["energy-kcal_100g"] ?? nutriments["energy-kcal"]));
-  const protein = roundMacro(nutriments.proteins_100g ?? nutriments.proteins);
-  const fat = roundMacro(nutriments.fat_100g ?? nutriments.fat);
-  const carbs = roundMacro(nutriments.carbohydrates_100g ?? nutriments.carbohydrates);
+  const calories = Math.round(toNumber(nutrition.calories));
+  const protein = roundMacro(nutrition.protein);
+  const fat = roundMacro(nutrition.fat);
+  const carbs = roundMacro(nutrition.carbs);
   const per100g = { calories, protein, fat, carbs };
-  const packageWeight = parseQuantityToGrams(product.quantity);
+  const { packageWeight, packageVolumeMl } = parsePackageQuantity(product.quantity);
+  const defaultPortionGrams = packageWeight || 100;
   const supermarket = detectSupermarket(product);
   const fullName = brand ? `${brand} - ${name}` : name;
   const barcode = cleanText(product.code || "");
@@ -167,7 +197,9 @@ function normalizeProduct(product) {
     per100g,
     nutritionBasis: "100g",
     packageWeight,
-    weight: packageWeight,
+    packageVolumeMl,
+    defaultPortionGrams,
+    weight: defaultPortionGrams,
     icon: supermarket ? "🛒" : "🥗",
     image: product.image_front_url || product.image_url || null,
     ingredients: ingredients ? cleanText(ingredients) : null,
@@ -351,17 +383,20 @@ function rankProducts(products, query) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, {
+  const { response, data } = await fetchJsonWithAbortTimeout(url, {
     headers: {
       Accept: "application/json"
     }
+  }, {
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    timeoutMessage: "Open Food Facts не відповідає. Спробуйте ще раз."
   });
 
   if (!response.ok) {
     throw new Error(`Open Food Facts request failed with status ${response.status}`);
   }
 
-  return response.json();
+  return data;
 }
 
 function buildSearchUrl(query, { ukrainianOnly }) {
@@ -425,11 +460,15 @@ export async function searchProductsByName(query) {
     let remoteProducts = (primaryData.products || []).map(normalizeProduct).filter(Boolean);
 
     if (remoteProducts.length < 8) {
-      const fallbackData = await fetchJson(buildSearchUrl(cleanQuery, { ukrainianOnly: false }));
-      remoteProducts = [
-        ...remoteProducts,
-        ...(fallbackData.products || []).map(normalizeProduct).filter(Boolean)
-      ];
+      try {
+        const fallbackData = await fetchJson(buildSearchUrl(cleanQuery, { ukrainianOnly: false }));
+        remoteProducts = [
+          ...remoteProducts,
+          ...(fallbackData.products || []).map(normalizeProduct).filter(Boolean)
+        ];
+      } catch (fallbackError) {
+        console.error("Open Food Facts fallback search failed:", fallbackError);
+      }
     }
 
     await cacheProducts(remoteProducts);

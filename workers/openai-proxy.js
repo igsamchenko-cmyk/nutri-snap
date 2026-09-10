@@ -10,7 +10,7 @@ const MAX_REQUESTS = 30;
 const WINDOW_SECONDS = 3600; // 1 година
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const corsHeaders = getCorsHeaders(request, env);
 
     if (request.method === 'OPTIONS') {
@@ -56,9 +56,7 @@ export default {
         );
       }
 
-      ctx.waitUntil(
-        env.RATE_LIMIT.put(kvKey, String(count + 1), { expirationTtl: WINDOW_SECONDS + 60 })
-      );
+      await env.RATE_LIMIT.put(kvKey, String(count + 1), { expirationTtl: WINDOW_SECONDS + 60 });
     }
     // ────────────────────────────────────────────────────────────────────────
 
@@ -80,13 +78,18 @@ export default {
         return jsonResponse({ error: { message: `Model ${parsed.model} is not allowed` } }, 400, corsHeaders);
       }
 
+      const sanitizedBody = sanitizeOpenAIRequest(parsed);
+      if (!sanitizedBody) {
+        return jsonResponse({ error: { message: 'Request input or response schema is invalid' } }, 400, corsHeaders);
+      }
+
       const openAiResponse = await fetch(OPENAI_RESPONSES_URL, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(parsed)
+        body: JSON.stringify(sanitizedBody)
       });
 
       return new Response(await openAiResponse.text(), {
@@ -102,6 +105,59 @@ export default {
     }
   }
 };
+
+function sanitizeOpenAIRequest(parsed) {
+  if (!Array.isArray(parsed.input) || parsed.input.length < 1 || parsed.input.length > 10) return null;
+  const safeInput = parsed.input.every(message => (
+    message
+    && message.role === 'user'
+    && Array.isArray(message.content)
+    && message.content.length > 0
+    && message.content.length <= 10
+    && message.content.every(content => {
+      if (!content || typeof content !== 'object') return false;
+      if (content.type === 'input_text') {
+        return typeof content.text === 'string' && content.text.length <= 20_000;
+      }
+      if (content.type === 'input_image') {
+        return typeof content.image_url === 'string'
+          && /^data:image\/(?:jpeg|png|webp);base64,/i.test(content.image_url);
+      }
+      return false;
+    })
+  ));
+  if (!safeInput) return null;
+
+  const format = parsed.text?.format;
+  if (
+    !format
+    || format.type !== 'json_schema'
+    || typeof format.name !== 'string'
+    || format.name.length > 100
+    || format.strict !== true
+    || !format.schema
+    || typeof format.schema !== 'object'
+    || Array.isArray(format.schema)
+  ) {
+    return null;
+  }
+
+  const requestedTokens = Number(parsed.max_output_tokens);
+  const sanitized = {
+    model: parsed.model,
+    input: parsed.input,
+    max_output_tokens: Number.isFinite(requestedTokens)
+      ? Math.min(2000, Math.max(1, Math.round(requestedTokens)))
+      : 1200,
+    text: parsed.text
+  };
+
+  if (parsed.reasoning?.effort === 'low') sanitized.reasoning = { effort: 'low' };
+  if (Number.isFinite(parsed.temperature)) {
+    sanitized.temperature = Math.min(1, Math.max(0, parsed.temperature));
+  }
+  return sanitized;
+}
 
 function getCorsHeaders(request, env) {
   const origin = request.headers.get('Origin');

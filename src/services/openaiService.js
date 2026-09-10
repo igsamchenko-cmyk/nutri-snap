@@ -12,7 +12,7 @@ import {
 import {
   AI_PHOTO_REQUEST_TIMEOUT_MESSAGE,
   AI_PHOTO_REQUEST_TIMEOUT_MS,
-  fetchWithAbortTimeout,
+  fetchJsonWithAbortTimeout,
   isAbortError
 } from '../utils/requestTimeout.js';
 import { filterValidAiNutritionResults, getValidatedAiNutritionResult } from './aiNutritionValidation.js';
@@ -185,6 +185,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
   }
 
   let response;
+  let data;
   try {
     const headers = {
       'Content-Type': 'application/json'
@@ -194,7 +195,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
       headers.Authorization = `Bearer ${trimmedApiKey}`;
     }
 
-    response = await fetchWithAbortTimeout(useProxy ? requestUrl : OPENAI_RESPONSES_URL, {
+    const result = await fetchJsonWithAbortTimeout(useProxy ? requestUrl : OPENAI_RESPONSES_URL, {
       method: 'POST',
       headers,
       body: JSON.stringify(buildResponseBody(modelName, input, schemaName, schema, maxOutputTokens))
@@ -202,6 +203,8 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
       timeoutMs: options.timeoutMs,
       timeoutMessage: options.timeoutMessage
     });
+    response = result.response;
+    data = result.data;
   } catch (error) {
     if (isAbortError(error)) {
       throw error;
@@ -211,11 +214,9 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
   }
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw handleOpenAIError(response, errorData);
+    throw handleOpenAIError(response, data || {});
   }
 
-  const data = await response.json();
   const textResponse = getOutputText(data);
 
   if (!textResponse) {

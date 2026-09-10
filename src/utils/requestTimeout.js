@@ -124,3 +124,26 @@ export async function fetchWithAbortTimeout(resource, options = {}, timeoutOptio
     timeout.clear();
   }
 }
+
+export async function fetchJsonWithAbortTimeout(resource, options = {}, timeoutOptions = {}) {
+  const timeout = createRequestTimeout(timeoutOptions.timeoutMs, timeoutOptions.timeoutMessage);
+  const combinedSignal = createCombinedAbortSignal([options.signal, timeout.signal]);
+
+  try {
+    const fetchOptions = combinedSignal.signal
+      ? { ...options, signal: combinedSignal.signal }
+      : { ...options };
+    const response = await fetch(resource, fetchOptions);
+    const data = await response.json();
+    timeout.throwIfAborted();
+    return { response, data };
+  } catch (error) {
+    if (timeout.signal?.aborted && isAbortError(error)) {
+      throw normalizeAbortError(timeout.signal.reason || error, timeoutOptions.timeoutMessage);
+    }
+    throw error;
+  } finally {
+    combinedSignal.clear();
+    timeout.clear();
+  }
+}
