@@ -5,6 +5,7 @@ import { everydayUkrainianProducts } from './everydayUkrainianProducts.js';
 import { expandedUkrainianProducts } from './expandedUkrainianProducts.js';
 import { importedProducts } from './importedProducts.js';
 import { retailUkrainianProducts } from './retailUkrainianProducts.js';
+import { buildProductCatalog } from './catalogPipeline.js';
 
 const rawProductCatalog = [
   ...ukrainianProductSeeds,
@@ -16,23 +17,8 @@ const rawProductCatalog = [
   ...importedProducts
 ];
 
-const UNSOURCED_WARNING = 'Довідкове усереднене значення. Перевірте КБЖВ на етикетці конкретного продукту.';
+const catalogBuild = buildProductCatalog(rawProductCatalog);
 
-export const productCatalog = rawProductCatalog.map(product => {
-  const hasVerifiableSource = Boolean(product.barcode || product.sourceUrl);
-  const per100g = product.per100g || {
-    calories: Number(product.calories) || 0,
-    protein: Number(product.protein) || 0,
-    fat: Number(product.fat) || 0,
-    carbs: Number(product.carbs) || 0
-  };
-
-  return {
-    ...product,
-    nutritionBasis: '100g',
-    per100g,
-    dataQuality: product.dataQuality || (hasVerifiableSource ? 'database' : 'reference'),
-    confidence: hasVerifiableSource ? product.confidence ?? null : null,
-    warning: product.warning || (hasVerifiableSource ? '' : UNSOURCED_WARNING)
-  };
-});
+export const productCatalog = catalogBuild.products;
+export const catalogDiagnostics = catalogBuild.diagnostics;
+export { normalizeProductSearchText } from './catalogPipeline.js';

@@ -1,0 +1,61 @@
+import { describe, expect, it } from 'vitest';
+import {
+  buildProductCatalog,
+  inferPreparationState,
+  normalizeCatalogProduct,
+  validateCatalogProduct
+} from './catalogPipeline.js';
+
+const makeProduct = overrides => ({
+  id: 'food-1',
+  name: 'Рис варений',
+  brand: 'Домашня кухня',
+  calories: 130,
+  protein: 2.7,
+  fat: 0.3,
+  carbs: 28.2,
+  weight: 100,
+  source: 'ua-core',
+  ...overrides
+});
+
+describe('catalog quality pipeline', () => {
+  it('infers preparation states without treating cheese as raw food', () => {
+    expect(inferPreparationState({ name: 'Куряче філе сире' })).toBe('raw');
+    expect(inferPreparationState({ name: 'Сир кисломолочний 5%' })).toBe('unspecified');
+    expect(inferPreparationState({ name: 'Макарони варені' })).toBe('cooked');
+  });
+
+  it('rejects impossible nutrition values', () => {
+    const product = normalizeCatalogProduct(makeProduct({ protein: 120 }));
+
+    expect(validateCatalogProduct(product)).toContain('invalid-protein');
+    expect(buildProductCatalog([product]).diagnostics.invalidCount).toBe(1);
+  });
+
+  it('keeps the richer duplicate and merges aliases from both records', () => {
+    const basic = makeProduct({ aliases: ['рис готовий'], source: 'ua-everyday' });
+    const preferred = makeProduct({
+      id: 'food-2',
+      aliases: ['рис відварений'],
+      supermarket: 'Сільпо',
+      source: 'ua-retail'
+    });
+    const result = buildProductCatalog([basic, preferred]);
+
+    expect(result.products).toHaveLength(1);
+    expect(result.diagnostics.duplicateCount).toBe(1);
+    expect(result.products[0]).toMatchObject({ id: 'food-2', supermarket: 'Сільпо' });
+    expect(result.products[0].aliases).toEqual(expect.arrayContaining(['рис готовий', 'рис відварений']));
+  });
+
+  it('does not merge different barcodes for otherwise identical branded products', () => {
+    const result = buildProductCatalog([
+      makeProduct({ barcode: '111' }),
+      makeProduct({ id: 'food-2', barcode: '222' })
+    ]);
+
+    expect(result.products).toHaveLength(2);
+    expect(result.diagnostics.duplicateCount).toBe(0);
+  });
+});

@@ -48,7 +48,7 @@ import {
   searchSmartProductsWithOpenAI
 } from './services/openaiService';
 import { mockFoods } from './data/mockFood';
-import { productCatalog } from './data/products';
+import { normalizeProductSearchText, productCatalog } from './data/products';
 import { GEMINI_MODEL_OPTIONS } from './constants';
 import {
   getProductByBarcode,
@@ -147,12 +147,7 @@ const MAX_SEARCH_SUGGESTIONS = 6;
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 const BarcodeScanner = React.lazy(() => import('./components/BarcodeScanner'));
 
-const normalizeSearchText = (value = '') =>
-  String(value)
-    .toLowerCase()
-    .replace(/[ʼ'`]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+const normalizeSearchText = normalizeProductSearchText;
 
 const areBrandAndSupermarketEquivalent = (brand, supermarket) => {
   if (!brand || !supermarket) return false;
@@ -226,12 +221,20 @@ const getFoodSearchText = (food) =>
     food.brand,
     food.supermarket,
     food.category,
+    ...(Array.isArray(food.aliases) ? food.aliases : [food.aliases]),
     food.searchText
   ].filter(Boolean).join(' '));
 
 const hasCompleteNutritionValues = (item) => (
   ["calories", "protein", "fat", "carbs"].every(field => Number.isFinite(Number(item?.[field])))
 );
+
+const getFoodNutritionLabel = (food) => {
+  const per100g = hasCompleteNutritionValues(food?.per100g) ? food.per100g : null;
+  if (per100g) return `${per100g.calories} ккал / 100 г`;
+
+  return `${Number(food?.calories) || 0} ккал / ${Number(food?.weight) || 100} г`;
+};
 
 const parseNutritionInput = (value) => Number(String(value ?? '').trim().replace(',', '.'));
 
@@ -4430,7 +4433,7 @@ export default function App() {
                                 {food.name}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {shouldShowBrandPrefix(food, false) ? `${food.brand} • ` : ''}{food.calories} ккал
+                                {shouldShowBrandPrefix(food, false) ? `${food.brand} • ` : ''}{getFoodNutritionLabel(food)}
                               </span>
                             </div>
                           </div>
@@ -4642,7 +4645,7 @@ export default function App() {
                                 {food.name}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {shouldShowBrandPrefix(food, !!food.supermarket) ? `${food.brand} • ` : ''}{food.calories} ккал / {food.weight}г
+                                {shouldShowBrandPrefix(food, !!food.supermarket) ? `${food.brand} • ` : ''}{getFoodNutritionLabel(food)}
                               </span>
                             </div>
                             <div className="search-food-actions">
