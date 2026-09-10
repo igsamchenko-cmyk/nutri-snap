@@ -161,23 +161,35 @@ describe('backup service', () => {
     expect(() => parseBackupFileContent('{bad json')).toThrow('Invalid backup JSON.');
   });
 
-  it('returns validation warnings for invalid optional fields without rejecting old partial backups', () => {
+  it('rejects invalid field types instead of silently importing a partial backup', () => {
     const validation = validateBackupPayload({
       meals: {},
       favorites: {},
       profile: { targetCalories: 2000 }
     });
 
-    expect(validation.isValid).toBe(true);
-    expect(validation.warnings).toEqual(expect.arrayContaining([
-      'Backup meals field is not an array and will be ignored.',
-      'Backup favorites field is not an array and will be ignored.'
+    expect(validation.isValid).toBe(false);
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      'Backup meals field must be an array.',
+      'Backup favorites field must be an array.'
     ]));
+    expect(() => prepareRestoreData({ meals: {}, profile: {} })).toThrow('Backup meals field must be an array.');
+  });
 
-    const restoreData = prepareRestoreData({ meals: {}, favorites: {}, profile: { targetCalories: 2000 } });
-    expect(restoreData.meals).toBeUndefined();
-    expect(restoreData.favorites).toBeUndefined();
-    expect(restoreData.profile).toEqual({ targetCalories: 2000 });
+  it('rejects arrays with null or primitive items', () => {
+    expect(validateBackupPayload({ learnedProducts: [null] })).toMatchObject({
+      isValid: false,
+      errors: ['Backup learnedProducts field contains an invalid item.']
+    });
+    expect(() => parseBackupFileContent('{"meals":[null]}')).toThrow(
+      'Backup meals field contains an invalid item.'
+    );
+  });
+
+  it('rejects JSON that is unrelated to NutriSnap data', () => {
+    expect(() => parseBackupFileContent('{"hello":"world"}')).toThrow(
+      'Backup does not contain any restorable NutriSnap data.'
+    );
   });
 
   it('creates predictable backup filenames', () => {

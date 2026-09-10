@@ -51,8 +51,13 @@ import { mockFoods } from './data/mockFood';
 import { productCatalog } from './data/products';
 import { GEMINI_MODEL_OPTIONS } from './constants';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
-import { safeSetItem, safeRemoveItem } from './utils/storage';
-import { getLearnedProducts, mergeLearnedProducts, saveLearnedProduct, setLearnedProducts } from './utils/learnedProducts';
+import { safeSetItem, safeRemoveItem, safeSetItemsAtomic } from './utils/storage';
+import {
+  getLearnedProducts,
+  MAX_LEARNED_PRODUCTS,
+  mergeLearnedProducts,
+  saveLearnedProduct
+} from './utils/learnedProducts';
 import { exportProductsToFile, importProductsFromFile } from './utils/productShare';
 import {
   createBackupFilename,
@@ -827,6 +832,18 @@ export default function App() {
     };
     window.addEventListener('nutrisnap-storage-full', handleStorageFull);
     return () => window.removeEventListener('nutrisnap-storage-full', handleStorageFull);
+  }, []);
+
+  useEffect(() => {
+    const handleStorageError = () => {
+      showToast(
+        'Браузер заборонив локальне збереження. Останню зміну не застосовано. Перевірте дозволи сайту.',
+        'error',
+        { duration: 7000 }
+      );
+    };
+    window.addEventListener('nutrisnap-storage-error', handleStorageError);
+    return () => window.removeEventListener('nutrisnap-storage-error', handleStorageError);
   }, []);
 
   const applyAppUpdate = () => {
@@ -2758,6 +2775,41 @@ export default function App() {
       try {
         const importedData = parseBackupFileContent(event.target.result);
         const restoreData = prepareRestoreData(importedData);
+        const restoredLearnedProducts = restoreData.learnedProducts?.slice(0, MAX_LEARNED_PRODUCTS);
+        const restoredProfile = restoreData.profile !== undefined
+          ? { ...profile, ...restoreData.profile }
+          : undefined;
+        const restoredApiKey = restoreData.apiKey !== undefined
+          ? String(restoreData.apiKey || '').trim() || DEFAULT_API_KEY
+          : undefined;
+        const storageEntries = [];
+        const addJsonStorageEntry = (key, value) => {
+          if (value !== undefined) storageEntries.push([key, JSON.stringify(value)]);
+        };
+        const addRawStorageEntry = (key, value) => {
+          if (value !== undefined) storageEntries.push([key, String(value)]);
+        };
+
+        addJsonStorageEntry('nutrisnap_meals', restoreData.meals);
+        addJsonStorageEntry('nutrisnap_water', restoreData.waterIntake);
+        addJsonStorageEntry('nutrisnap_weight_log', restoreData.weightLog);
+        addJsonStorageEntry('nutrisnap_profile', restoredProfile);
+        addJsonStorageEntry('nutrisnap_custom_foods', restoreData.customFoods);
+        addJsonStorageEntry('nutrisnap_favorites', restoreData.favorites);
+        addJsonStorageEntry('nutrisnap_learned_products', restoredLearnedProducts);
+        addJsonStorageEntry('nutrisnap_custom_barcodes', restoreData.customBarcodes);
+        addJsonStorageEntry('nutrisnap_food_portions', restoreData.rememberedFoodPortions);
+        addRawStorageEntry('nutrisnap_apikey', restoredApiKey);
+        addRawStorageEntry('nutrisnap_openai_apikey', restoreData.openAiApiKey);
+        addRawStorageEntry('nutrisnap_openai_proxy_url', restoreData.openAiProxyUrl);
+        addRawStorageEntry('nutrisnap_scanmode', restoreData.scanMode);
+        addRawStorageEntry('nutrisnap_geminimodel', restoreData.geminiModel);
+        addRawStorageEntry('nutrisnap_openai_model', restoreData.openAiModel);
+        addRawStorageEntry('nutrisnap_theme', restoreData.theme);
+
+        if (!safeSetItemsAtomic(storageEntries)) {
+          throw new Error('Не вдалося зберегти резервну копію. Поточні дані відновлено.');
+        }
         
         // Restore state here; DOM, state setters and toasts stay in App.jsx.
         if (restoreData.meals !== undefined) {
@@ -2769,8 +2821,8 @@ export default function App() {
         if (restoreData.weightLog !== undefined) {
           setWeightLog(restoreData.weightLog);
         }
-        if (restoreData.profile !== undefined) {
-          setProfile(prev => ({ ...prev, ...restoreData.profile }));
+        if (restoredProfile !== undefined) {
+          setProfile(restoredProfile);
         }
         if (restoreData.customFoods !== undefined) {
           setCustomFoods(restoreData.customFoods);
@@ -2778,9 +2830,8 @@ export default function App() {
         if (restoreData.favorites !== undefined) {
           setFavorites(restoreData.favorites);
         }
-        if (restoreData.learnedProducts !== undefined) {
-          setLearnedProducts(restoreData.learnedProducts);
-          refreshLearnedProducts();
+        if (restoredLearnedProducts !== undefined) {
+          setLearnedProductsState(restoredLearnedProducts);
         }
         if (restoreData.customBarcodes !== undefined) {
           setCustomBarcodes(restoreData.customBarcodes);
@@ -2789,9 +2840,8 @@ export default function App() {
           setRememberedFoodPortions(restoreData.rememberedFoodPortions);
         }
         // Legacy backups may contain credentials. New backups intentionally omit them.
-        if (restoreData.apiKey !== undefined) {
-          const importedApiKey = String(restoreData.apiKey || '').trim();
-          setApiKey(importedApiKey || DEFAULT_API_KEY);
+        if (restoredApiKey !== undefined) {
+          setApiKey(restoredApiKey);
         }
         if (restoreData.openAiApiKey !== undefined) {
           setOpenAiApiKey(String(restoreData.openAiApiKey || '').trim());

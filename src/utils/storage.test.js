@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { safeSetItem, safeRemoveItem } from './storage';
+import { safeSetItem, safeRemoveItem, safeSetItemsAtomic } from './storage';
 
 class MockStorage {
   constructor() {
@@ -72,5 +72,28 @@ describe('Storage Utilities', () => {
     expect(eventSpy.mock.calls[0][0].detail).toEqual({ key: 'overflow-key' });
 
     window.removeEventListener('nutrisnap-storage-full', eventSpy);
+  });
+
+  it('should roll back every key when an atomic write fails', () => {
+    localStorage.setItem('first', 'old-first');
+    localStorage.setItem('second', 'old-second');
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === 'second' && value === 'new-second') {
+        const error = new Error('Quota exceeded');
+        error.name = 'QuotaExceededError';
+        throw error;
+      }
+      originalSetItem(key, value);
+    });
+
+    const success = safeSetItemsAtomic([
+      ['first', 'new-first'],
+      ['second', 'new-second']
+    ]);
+
+    expect(success).toBe(false);
+    expect(localStorage.getItem('first')).toBe('old-first');
+    expect(localStorage.getItem('second')).toBe('old-second');
   });
 });

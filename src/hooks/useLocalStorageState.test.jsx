@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import useLocalStorageState from './useLocalStorageState';
 
@@ -33,6 +33,7 @@ Object.defineProperty(global, 'localStorage', {
 describe('useLocalStorageState hook', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.restoreAllMocks();
   });
 
   it('should initialize with default value when localStorage is empty', () => {
@@ -66,5 +67,32 @@ describe('useLocalStorageState hook', () => {
     });
     expect(result.current[0]).toBe('new-raw-value');
     expect(localStorage.getItem('raw-key')).toBe('new-raw-value');
+  });
+
+  it('should keep the previous state when persistence fails', () => {
+    const { result } = renderHook(() => useLocalStorageState('test-key', 'default'));
+    vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      const error = new Error('Quota exceeded');
+      error.name = 'QuotaExceededError';
+      throw error;
+    });
+
+    act(() => {
+      result.current[1]('lost-value');
+    });
+
+    expect(result.current[0]).toBe('default');
+  });
+
+  it('should merge functional updates with the latest value written by another tab', () => {
+    const { result } = renderHook(() => useLocalStorageState('list-key', []));
+    localStorage.setItem('list-key', JSON.stringify(['from-other-tab']));
+
+    act(() => {
+      result.current[1](items => [...items, 'local']);
+    });
+
+    expect(result.current[0]).toEqual(['from-other-tab', 'local']);
+    expect(JSON.parse(localStorage.getItem('list-key'))).toEqual(['from-other-tab', 'local']);
   });
 });
