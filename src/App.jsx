@@ -50,7 +50,11 @@ import {
 import { mockFoods } from './data/mockFood';
 import { productCatalog } from './data/products';
 import { GEMINI_MODEL_OPTIONS } from './constants';
-import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
+import {
+  getProductByBarcode,
+  searchCachedProductsByName,
+  searchProductsByName
+} from './services/openFoodFactsService';
 import { safeSetItem, safeRemoveItem, safeSetItemsAtomic } from './utils/storage';
 import {
   getLearnedProducts,
@@ -388,6 +392,7 @@ export default function App() {
     setDetailItem(null);
   };
   const [externalSearchFoods, setExternalSearchFoods] = useState([]);
+  const [externalSearchMessage, setExternalSearchMessage] = useState('');
   const [aiSearchFoods, setAiSearchFoods] = useState([]);
   const [isSearchingExternal, setIsSearchingExternal] = useState(false);
   const [isSearchingAI, setIsSearchingAI] = useState(false);
@@ -395,6 +400,7 @@ export default function App() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isNativeScannerSupported] = useState(() => 'BarcodeDetector' in window);
   const externalSearchCacheRef = useRef(new Map());
+  const externalSearchRequestIdRef = useRef(0);
   const aiSearchCacheRef = useRef(new Map());
   const aiSearchRequestIdRef = useRef(0);
   const aiSearchInFlightKeyRef = useRef('');
@@ -929,9 +935,12 @@ export default function App() {
     return () => stopCamera();
   }, [activeTab, scannerMode, cameraRequested]);
 
-  // Дебоунс-пошук продуктів в українській базі Open Food Facts та автоматичний AI-пошук
+  // Локальний пошук у продуктах, раніше знайдених через Open Food Facts.
+  // Віддалений API запускається окремою кнопкою, щоб не порушувати його ліміт пошуку.
   useEffect(() => {
     const cleanQuery = searchQuery.trim();
+    externalSearchRequestIdRef.current += 1;
+    setExternalSearchMessage('');
 
     if (activeTab !== 'scanner' || scannerMode !== 'search' || cleanQuery.length < 3) {
       aiSearchRequestIdRef.current += 1;
@@ -944,44 +953,23 @@ export default function App() {
     }
 
     let cancelled = false;
-    const cacheKey = normalizeSearchText(cleanQuery);
-    const cachedExternal = externalSearchCacheRef.current.get(cacheKey);
-
-    if (cachedExternal && Date.now() - cachedExternal.cachedAt < SEARCH_CACHE_TTL_MS) {
-      setExternalSearchFoods(cachedExternal.results);
-      setIsSearchingExternal(false);
-    } else {
-      setIsSearchingExternal(true);
-    }
+    setIsSearchingExternal(false);
 
     const delayTimer = setTimeout(async () => {
       try {
-        if (cachedExternal && Date.now() - cachedExternal.cachedAt < SEARCH_CACHE_TTL_MS) {
-          return;
-        }
-
-        const results = await searchProductsByName(cleanQuery);
-        externalSearchCacheRef.current.set(cacheKey, {
-          cachedAt: Date.now(),
-          results
-        });
-
+        const results = await searchCachedProductsByName(cleanQuery);
         if (cancelled) return;
         setExternalSearchFoods(results);
       } catch (err) {
-        console.error("Error in live search query:", err);
-      } finally {
-        if (!cancelled) {
-          setIsSearchingExternal(false);
-        }
+        console.error("Error in cached product search:", err);
       }
-    }, 900); // 900ms debounce
+    }, 150);
 
     return () => {
       cancelled = true;
       clearTimeout(delayTimer);
     };
-  }, [searchQuery, activeTab, scannerMode, scanMode, apiKey, openAiApiKey, openAiProxyUrl, geminiModel, openAiModel]);
+  }, [searchQuery, activeTab, scannerMode]);
 
   // --- Camera Operations ---
   const startCamera = async () => {
@@ -2224,6 +2212,51 @@ export default function App() {
       onAction: () => setMeals(prev => prev.filter(meal => meal.id !== newMeal.id))
     });
     if (!stayOpen) finishFoodSearch();
+  };
+
+  const triggerExternalProductSearch = async (queryToSearch) => {
+    const cleanQuery = queryToSearch.trim();
+    if (cleanQuery.length < 3 || isSearchingExternal) return;
+
+    const cacheKey = normalizeSearchText(cleanQuery);
+    const cachedExternal = externalSearchCacheRef.current.get(cacheKey);
+    if (cachedExternal && Date.now() - cachedExternal.cachedAt < SEARCH_CACHE_TTL_MS) {
+      setExternalSearchFoods(cachedExternal.results);
+      return cachedExternal.results;
+    }
+
+    const requestId = externalSearchRequestIdRef.current + 1;
+    externalSearchRequestIdRef.current = requestId;
+    setIsSearchingExternal(true);
+    setExternalSearchMessage('');
+
+    try {
+      const results = await searchProductsByName(cleanQuery);
+      externalSearchCacheRef.current.set(cacheKey, {
+        cachedAt: Date.now(),
+        results
+      });
+
+      if (requestId === externalSearchRequestIdRef.current) {
+        setExternalSearchFoods(results);
+        setExternalSearchMessage(
+          results.length > 0
+            ? `Знайдено продуктів: ${results.length}`
+            : 'За цим запитом продуктів не знайдено.'
+        );
+      }
+      return results;
+    } catch (err) {
+      console.error("Error in Open Food Facts search:", err);
+      if (requestId === externalSearchRequestIdRef.current) {
+        setExternalSearchMessage('Велика база тимчасово не відповідає. Спробуйте трохи пізніше.');
+      }
+      return [];
+    } finally {
+      if (requestId === externalSearchRequestIdRef.current) {
+        setIsSearchingExternal(false);
+      }
+    }
   };
 
   const triggerAISmartSearch = async (queryToSearch) => {
@@ -4420,6 +4453,51 @@ export default function App() {
                   </section>
                 )}
 
+                {searchQuery.trim().length >= 3 && ['Усі', 'Супермаркети'].includes(selectedCategoryFilter) && (
+                  <div style={{ padding: '0 16px 10px' }}>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => triggerExternalProductSearch(searchQuery)}
+                      disabled={isSearchingExternal}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        borderRadius: '14px',
+                        background: 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)',
+                        border: 'none',
+                        color: 'white',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)'
+                      }}
+                    >
+                      {isSearchingExternal ? (
+                        <>
+                          <RefreshCw className="spin" size={16} />
+                          <span>Шукаємо продукти...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Database size={16} />
+                          <span>Знайти у великій базі продуктів</span>
+                        </>
+                      )}
+                    </button>
+                    <div style={{ marginTop: '6px', color: '#94a3b8', fontSize: '11px', textAlign: 'center' }}>
+                      Open Food Facts · знайдені товари збережуться на цьому пристрої
+                    </div>
+                    {externalSearchMessage && (
+                      <div role="status" style={{ marginTop: '6px', color: '#94a3b8', fontSize: '11px', textAlign: 'center' }}>
+                        {externalSearchMessage}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* AI Smart Search Button */}
                 {searchQuery.trim().length >= 2 && (
                   <div style={{ padding: '0 16px 12px' }}>
@@ -4643,16 +4721,7 @@ export default function App() {
                             tabIndex={0}
                             onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.currentTarget.click(); } }}
                           style={{ borderLeft: '3px solid var(--color-water)' }}
-                          onClick={() => {
-                            setCustomFoodName(food.name);
-                            setCustomFoodCalories('');
-                            setCustomFoodProtein('');
-                            setCustomFoodFat('');
-                            setCustomFoodCarbs('');
-                            setCustomFoodWeight(food.weight || '100');
-                            setCustomFoodEditTarget(null);
-                            setIsCustomFoodModalOpen(true);
-                          }}
+                          onClick={() => selectSearchFood(food)}
                         >
                           <span className="search-food-icon" style={{ fontSize: '24px' }}>🛒</span>
                           <div className="search-food-content" style={{ display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left' }}>
@@ -4660,7 +4729,7 @@ export default function App() {
                               {food.name}
                             </span>
                             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                              {shouldShowBrandPrefix(food, true) ? `${food.brand} • ` : ''}Зовнішня база: КБЖВ підтвердіть з етикетки
+                              {shouldShowBrandPrefix(food, true) ? `${food.brand} • ` : ''}{food.calories} ккал / 100 г · дані Open Food Facts
                             </span>
                           </div>
                           <div className="search-food-actions">

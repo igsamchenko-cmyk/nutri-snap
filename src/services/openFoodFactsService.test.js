@@ -1,11 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getProductByBarcode, searchProductsByName } from './openFoodFactsService';
+import {
+  getProductByBarcode,
+  searchCachedProductsByName,
+  searchProductsByName
+} from './openFoodFactsService';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe('Open Food Facts normalization', () => {
+  it('searches the accumulated local cache without contacting the remote API', async () => {
+    const remoteFetch = vi.fn();
+    vi.stubGlobal('fetch', remoteFetch);
+
+    const products = await searchCachedProductsByName('кефір');
+
+    expect(products).toEqual([]);
+    expect(remoteFetch).not.toHaveBeenCalled();
+  });
+
   it('keeps per-100g nutrition separate from package weight', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
@@ -32,7 +46,9 @@ describe('Open Food Facts normalization', () => {
       weight: 500,
       packageWeight: 500,
       nutritionBasis: '100g',
-      per100g: { calories: 100, protein: 5, fat: 2, carbs: 15 }
+      per100g: { calories: 100, protein: 5, fat: 2, carbs: 15 },
+      sourceUrl: 'https://world.openfoodfacts.org/product/4820000000000',
+      warning: expect.stringContaining('Open Food Facts')
     });
   });
 
@@ -134,5 +150,17 @@ describe('Open Food Facts normalization', () => {
     const products = await searchProductsByName('кефір');
     expect(products).toHaveLength(1);
     expect(products[0]).toMatchObject({ name: 'Кефір', calories: 50 });
+  });
+
+  it('reports an unavailable remote search without trying to parse an HTML error page', async () => {
+    const parseJson = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: parseJson
+    }));
+
+    await expect(searchProductsByName('рідкісний продукт')).rejects.toThrow('status 503');
+    expect(parseJson).not.toHaveBeenCalled();
   });
 });

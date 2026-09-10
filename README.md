@@ -2,6 +2,10 @@
 
 NutriSnap is a mobile-first React/Vite app for tracking meals, water intake, calories, and macros. It supports food photo analysis through Gemini, barcode lookup through Open Food Facts, a local food database, custom foods, favorites, PWA install support, and local backup/restore.
 
+## Product data
+
+NutriSnap searches packaged foods through Open Food Facts and stores selected results locally on the user's device. Open Food Facts data is available under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/). Product cards keep their source metadata, and users should verify nutrition values against the product label.
+
 ## Setup
 
 Install dependencies:
