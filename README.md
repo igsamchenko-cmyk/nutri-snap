@@ -6,6 +6,22 @@ NutriSnap is a mobile-first React/Vite app for tracking meals, water intake, cal
 
 NutriSnap searches packaged foods through Open Food Facts and stores selected results locally on the user's device. Open Food Facts data is available under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/). Product cards keep their source metadata, and users should verify nutrition values against the product label.
 
+The built-in catalogue passes through one quality pipeline before it reaches search. The pipeline normalizes names and aliases, identifies raw, dry, cooked, prepared, and frozen foods, removes duplicate name-brand-state or barcode entries, and rejects impossible per-100g nutrition values. Default portion weight remains separate from nutrition values per 100 g.
+
+Bulk CSV or JSON files can be added with:
+
+```bash
+npm run import:products -- path/to/products.csv
+```
+
+Imported rows may include Ukrainian or English column names. At minimum, provide a product name plus calories, protein, fat, and carbohydrates per 100 g. Use `aliases` or `синоніми`, separated by semicolons, to make regional names and common spelling variants searchable.
+
+Validate the complete built-in catalogue after an import:
+
+```bash
+npm run check:products
+```
+
 ## Setup
 
 Install dependencies:

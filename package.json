@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "check:products": "node scripts/check-product-catalog.mjs",
     "import:products": "node scripts/import-products.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
