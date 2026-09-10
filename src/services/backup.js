@@ -18,6 +18,28 @@ const CREDENTIAL_FIELD_NAMES = new Set([
   'token'
 ]);
 
+const MAX_BACKUP_TEXT_LENGTH = 20 * 1024 * 1024;
+const RESTORABLE_FIELDS = new Set([
+  'meals',
+  'waterIntake',
+  'water_intake',
+  'weight_log',
+  'weightLog',
+  'profile',
+  'customFoods',
+  'favorites',
+  'learnedProducts',
+  'customBarcodes',
+  'rememberedFoodPortions',
+  'apiKey',
+  'openAiApiKey',
+  'openAiProxyUrl',
+  'scanMode',
+  'geminiModel',
+  'openAiModel',
+  'theme'
+]);
+
 function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object, key);
 }
@@ -144,35 +166,40 @@ export function validateBackupPayload(payload) {
     };
   }
 
-  if (hasOwn(payload, 'meals') && !Array.isArray(payload.meals)) {
-    warnings.push('Backup meals field is not an array and will be ignored.');
+  if (hasOwn(payload, 'version') && typeof payload.version !== 'string') {
+    errors.push('Backup version must be a string.');
   }
-  if (hasOwn(payload, 'customFoods') && !Array.isArray(payload.customFoods)) {
-    warnings.push('Backup customFoods field is not an array and will be ignored.');
+
+  if (![...RESTORABLE_FIELDS].some(field => hasOwn(payload, field))) {
+    errors.push('Backup does not contain any restorable NutriSnap data.');
   }
-  if (hasOwn(payload, 'learnedProducts') && !Array.isArray(payload.learnedProducts)) {
-    warnings.push('Backup learnedProducts field is not an array and will be ignored.');
+
+  for (const key of ['meals', 'customFoods', 'learnedProducts', 'favorites']) {
+    if (!hasOwn(payload, key)) continue;
+    if (!Array.isArray(payload[key])) {
+      errors.push('Backup ' + key + ' field must be an array.');
+    } else if (payload[key].some(item => !isPlainObject(item))) {
+      errors.push('Backup ' + key + ' field contains an invalid item.');
+    }
   }
-  if (hasOwn(payload, 'favorites') && !Array.isArray(payload.favorites)) {
-    warnings.push('Backup favorites field is not an array and will be ignored.');
+
+  for (const key of ['waterIntake', 'water_intake', 'weight_log', 'weightLog', 'profile', 'customBarcodes', 'rememberedFoodPortions']) {
+    if (hasOwn(payload, key) && !isPlainObject(payload[key])) {
+      errors.push('Backup ' + key + ' field must be an object.');
+    }
   }
-  if (hasOwn(payload, 'waterIntake') && !isPlainObject(payload.waterIntake)) {
-    warnings.push('Backup waterIntake field is not an object and will be ignored.');
+
+  for (const key of ['apiKey', 'openAiApiKey', 'openAiProxyUrl', 'geminiModel', 'openAiModel']) {
+    if (hasOwn(payload, key) && typeof payload[key] !== 'string') {
+      errors.push('Backup ' + key + ' field must be a string.');
+    }
   }
-  if (hasOwn(payload, 'weight_log') && !isPlainObject(payload.weight_log)) {
-    warnings.push('Backup weight_log field is not an object and will be ignored.');
+
+  if (hasOwn(payload, 'scanMode') && !['mock', 'gemini', 'openai'].includes(payload.scanMode)) {
+    errors.push('Backup scanMode field is invalid.');
   }
-  if (hasOwn(payload, 'weightLog') && !isPlainObject(payload.weightLog)) {
-    warnings.push('Backup weightLog field is not an object and will be ignored.');
-  }
-  if (hasOwn(payload, 'profile') && !isPlainObject(payload.profile)) {
-    warnings.push('Backup profile field is not an object and will be ignored.');
-  }
-  if (hasOwn(payload, 'customBarcodes') && !isPlainObject(payload.customBarcodes)) {
-    warnings.push('Backup customBarcodes field is not an object and will be ignored.');
-  }
-  if (hasOwn(payload, 'rememberedFoodPortions') && !isPlainObject(payload.rememberedFoodPortions)) {
-    warnings.push('Backup rememberedFoodPortions field is not an object and will be ignored.');
+  if (hasOwn(payload, 'theme') && !['dark', 'light'].includes(payload.theme)) {
+    errors.push('Backup theme field is invalid.');
   }
 
   return {
@@ -183,9 +210,14 @@ export function validateBackupPayload(payload) {
 }
 
 export function parseBackupFileContent(text = '') {
+  const backupText = String(text || '');
+  if (backupText.length > MAX_BACKUP_TEXT_LENGTH) {
+    throw new Error('Backup file is too large.');
+  }
+
   let payload;
   try {
-    payload = JSON.parse(String(text || ''));
+    payload = JSON.parse(backupText);
   } catch {
     throw new Error('Invalid backup JSON.');
   }

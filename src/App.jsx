@@ -51,8 +51,13 @@ import { mockFoods } from './data/mockFood';
 import { productCatalog } from './data/products';
 import { GEMINI_MODEL_OPTIONS } from './constants';
 import { getProductByBarcode, searchProductsByName } from './services/openFoodFactsService';
-import { safeSetItem, safeRemoveItem } from './utils/storage';
-import { getLearnedProducts, mergeLearnedProducts, saveLearnedProduct, setLearnedProducts } from './utils/learnedProducts';
+import { safeSetItem, safeRemoveItem, safeSetItemsAtomic } from './utils/storage';
+import {
+  getLearnedProducts,
+  MAX_LEARNED_PRODUCTS,
+  mergeLearnedProducts,
+  saveLearnedProduct
+} from './utils/learnedProducts';
 import { exportProductsToFile, importProductsFromFile } from './utils/productShare';
 import {
   createBackupFilename,
@@ -224,9 +229,15 @@ const hasCompleteNutritionValues = (item) => (
   ["calories", "protein", "fat", "carbs"].every(field => Number.isFinite(Number(item?.[field])))
 );
 
-const hasFilledNutritionInputs = (...values) => (
-  values.every(value => String(value ?? '').trim() !== '' && Number.isFinite(Number(value)))
-);
+const parseNutritionInput = (value) => Number(String(value ?? '').trim().replace(',', '.'));
+
+const hasFilledNutritionInputs = (calories, protein, fat, carbs, weight) => {
+  const nutrition = [calories, protein, fat, carbs].map(parseNutritionInput);
+  const parsedWeight = parseNutritionInput(weight);
+  return nutrition.every(value => Number.isFinite(value) && value >= 0)
+    && Number.isFinite(parsedWeight)
+    && parsedWeight > 0;
+};
 
 const getFoodPortionKey = (food) => {
   if (!food) return '';
@@ -403,22 +414,22 @@ export default function App() {
       const saved = localStorage.getItem('nutrisnap_profile');
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Міграція: додати нові поля якщо їх немає
-        return {
+        const migratedProfile = {
           age: 25,
           gender: 'male',
           activityLevel: 'moderate',
           targetWater: 2100,
           ...parsed,
-          // Старі профілі могли містити вручну введені цілі без ознаки режиму.
-          // Зберігаємо ці значення, доки користувач явно не обере автоперерахунок.
           targetsMode: parsed.targetsMode === 'auto' ? 'auto' : 'manual'
         };
+        return migratedProfile.targetsMode === 'auto'
+          ? { ...migratedProfile, ...calculateAutomaticNutritionTargets(migratedProfile) }
+          : migratedProfile;
       }
     } catch (e) {
       console.error("Error reading nutrisnap_profile:", e);
     }
-    return {
+    const defaultProfile = {
       weight: 70,
       height: 170,
       age: 25,
@@ -432,6 +443,7 @@ export default function App() {
       targetWater: 2100,
       targetsMode: 'auto'
     };
+    return { ...defaultProfile, ...calculateAutomaticNutritionTargets(defaultProfile) };
   });
 
   const [weightInput, setWeightInput] = useState(profile.weight || '');
@@ -821,6 +833,18 @@ export default function App() {
     };
     window.addEventListener('nutrisnap-storage-full', handleStorageFull);
     return () => window.removeEventListener('nutrisnap-storage-full', handleStorageFull);
+  }, []);
+
+  useEffect(() => {
+    const handleStorageError = () => {
+      showToast(
+        'Браузер заборонив локальне збереження. Останню зміну не застосовано. Перевірте дозволи сайту.',
+        'error',
+        { duration: 7000 }
+      );
+    };
+    window.addEventListener('nutrisnap-storage-error', handleStorageError);
+    return () => window.removeEventListener('nutrisnap-storage-error', handleStorageError);
   }, []);
 
   const applyAppUpdate = () => {
@@ -1213,7 +1237,8 @@ export default function App() {
         protein: Number(localNutritionMatch.protein),
         fat: Number(localNutritionMatch.fat),
         carbs: Number(localNutritionMatch.carbs),
-        weight: Number(localNutritionMatch.weight) || 100,
+        weight: Number(result.weight) || Number(localNutritionMatch.defaultPortionGrams) || Number(localNutritionMatch.weight) || 100,
+        nutritionBasis: "100g",
         ingredients: localNutritionMatch.ingredients || result.ingredients || '',
         dataQuality: "database_match",
         needsManualNutrition: false,
@@ -1685,11 +1710,11 @@ export default function App() {
       return;
     }
 
-    const kcalVal = Number(customFoodCalories) || 0;
-    const proteinVal = Number(customFoodProtein) || 0;
-    const fatVal = Number(customFoodFat) || 0;
-    const carbsVal = Number(customFoodCarbs) || 0;
-    const defaultWeightVal = Number(customFoodWeight) || 100;
+    const kcalVal = parseNutritionInput(customFoodCalories);
+    const proteinVal = parseNutritionInput(customFoodProtein);
+    const fatVal = parseNutritionInput(customFoodFat);
+    const carbsVal = parseNutritionInput(customFoodCarbs);
+    const defaultWeightVal = parseNutritionInput(customFoodWeight);
 
     const scaleTo100 = defaultWeightVal > 0 ? (100 / defaultWeightVal) : 1;
     const normalizedNutrition = roundNutritionValues({
@@ -1697,12 +1722,11 @@ export default function App() {
       protein: proteinVal * scaleTo100,
       fat: fatVal * scaleTo100,
       carbs: carbsVal * scaleTo100
-    }) || {
-      calories: 0,
-      protein: 0,
-      fat: 0,
-      carbs: 0
-    };
+    });
+    if (!normalizedNutrition) {
+      showToast("Не вдалося нормалізувати КБЖВ. Перевірте введені значення.", "error");
+      return;
+    }
     const now = new Date().toISOString();
     const legacyCustomFood = {
       name: customFoodName.trim(),
@@ -2540,10 +2564,22 @@ export default function App() {
 
         const newCals = Math.round(calculateCaloriesFromMacros(pVal, fVal, cVal) ?? 0);
         const nextTotals = { calories: newCals, protein: pVal, fat: fVal, carbs: cVal };
+        const servingGrams = Number(meal.servingGrams ?? meal.weight) || 100;
+        const nextPer100g = roundNutritionValues({
+          calories: newCals * 100 / servingGrams,
+          protein: pVal * 100 / servingGrams,
+          fat: fVal * 100 / servingGrams,
+          carbs: cVal * 100 / servingGrams
+        });
 
         return {
           ...meal,
-          ...(meal.totals ? { totals: nextTotals } : {}),
+          totals: nextTotals,
+          servingGrams,
+          per100g: nextPer100g,
+          ...(meal.foodSnapshot ? {
+            foodSnapshot: { ...meal.foodSnapshot, per100g: nextPer100g }
+          } : {}),
           protein: p,
           fat: f,
           carbs: c,
@@ -2683,7 +2719,10 @@ export default function App() {
     }));
     
     if (window.confirm("Бажаєте автоматично перерахувати цілі калорійності та макросів на основі нової ваги?")) {
-      handleProfileChange('weight', weightNum);
+      setProfile(current => {
+        const updated = { ...current, weight: weightNum };
+        return { ...updated, ...calculateAutomaticNutritionTargets(updated) };
+      });
     } else {
       setProfile(prev => ({ ...prev, weight: weightNum }));
     }
@@ -2740,6 +2779,41 @@ export default function App() {
       try {
         const importedData = parseBackupFileContent(event.target.result);
         const restoreData = prepareRestoreData(importedData);
+        const restoredLearnedProducts = restoreData.learnedProducts?.slice(0, MAX_LEARNED_PRODUCTS);
+        const restoredProfile = restoreData.profile !== undefined
+          ? { ...profile, ...restoreData.profile }
+          : undefined;
+        const restoredApiKey = restoreData.apiKey !== undefined
+          ? String(restoreData.apiKey || '').trim() || DEFAULT_API_KEY
+          : undefined;
+        const storageEntries = [];
+        const addJsonStorageEntry = (key, value) => {
+          if (value !== undefined) storageEntries.push([key, JSON.stringify(value)]);
+        };
+        const addRawStorageEntry = (key, value) => {
+          if (value !== undefined) storageEntries.push([key, String(value)]);
+        };
+
+        addJsonStorageEntry('nutrisnap_meals', restoreData.meals);
+        addJsonStorageEntry('nutrisnap_water', restoreData.waterIntake);
+        addJsonStorageEntry('nutrisnap_weight_log', restoreData.weightLog);
+        addJsonStorageEntry('nutrisnap_profile', restoredProfile);
+        addJsonStorageEntry('nutrisnap_custom_foods', restoreData.customFoods);
+        addJsonStorageEntry('nutrisnap_favorites', restoreData.favorites);
+        addJsonStorageEntry('nutrisnap_learned_products', restoredLearnedProducts);
+        addJsonStorageEntry('nutrisnap_custom_barcodes', restoreData.customBarcodes);
+        addJsonStorageEntry('nutrisnap_food_portions', restoreData.rememberedFoodPortions);
+        addRawStorageEntry('nutrisnap_apikey', restoredApiKey);
+        addRawStorageEntry('nutrisnap_openai_apikey', restoreData.openAiApiKey);
+        addRawStorageEntry('nutrisnap_openai_proxy_url', restoreData.openAiProxyUrl);
+        addRawStorageEntry('nutrisnap_scanmode', restoreData.scanMode);
+        addRawStorageEntry('nutrisnap_geminimodel', restoreData.geminiModel);
+        addRawStorageEntry('nutrisnap_openai_model', restoreData.openAiModel);
+        addRawStorageEntry('nutrisnap_theme', restoreData.theme);
+
+        if (!safeSetItemsAtomic(storageEntries)) {
+          throw new Error('Не вдалося зберегти резервну копію. Поточні дані відновлено.');
+        }
         
         // Restore state here; DOM, state setters and toasts stay in App.jsx.
         if (restoreData.meals !== undefined) {
@@ -2751,8 +2825,8 @@ export default function App() {
         if (restoreData.weightLog !== undefined) {
           setWeightLog(restoreData.weightLog);
         }
-        if (restoreData.profile !== undefined) {
-          setProfile(prev => ({ ...prev, ...restoreData.profile }));
+        if (restoredProfile !== undefined) {
+          setProfile(restoredProfile);
         }
         if (restoreData.customFoods !== undefined) {
           setCustomFoods(restoreData.customFoods);
@@ -2760,9 +2834,8 @@ export default function App() {
         if (restoreData.favorites !== undefined) {
           setFavorites(restoreData.favorites);
         }
-        if (restoreData.learnedProducts !== undefined) {
-          setLearnedProducts(restoreData.learnedProducts);
-          refreshLearnedProducts();
+        if (restoredLearnedProducts !== undefined) {
+          setLearnedProductsState(restoredLearnedProducts);
         }
         if (restoreData.customBarcodes !== undefined) {
           setCustomBarcodes(restoreData.customBarcodes);
@@ -2771,9 +2844,8 @@ export default function App() {
           setRememberedFoodPortions(restoreData.rememberedFoodPortions);
         }
         // Legacy backups may contain credentials. New backups intentionally omit them.
-        if (restoreData.apiKey !== undefined) {
-          const importedApiKey = String(restoreData.apiKey || '').trim();
-          setApiKey(importedApiKey || DEFAULT_API_KEY);
+        if (restoredApiKey !== undefined) {
+          setApiKey(restoredApiKey);
         }
         if (restoreData.openAiApiKey !== undefined) {
           setOpenAiApiKey(String(restoreData.openAiApiKey || '').trim());
@@ -2819,9 +2891,15 @@ export default function App() {
         throw new Error("У файлі немає продуктів з повними КБЖВ.");
       }
 
-      mergeLearnedProducts(completeProducts);
+      const mergedProducts = mergeLearnedProducts(completeProducts);
       refreshLearnedProducts();
-      showToast(`Імпортовано ${completeProducts.length} продуктів`, "success");
+      const wasLimited = completeProducts.length > MAX_LEARNED_PRODUCTS;
+      showToast(
+        wasLimited
+          ? 'Локальна база вміщує ' + MAX_LEARNED_PRODUCTS + ' продуктів. Збережено найновіші записи.'
+          : 'Локальна база оновлена: збережено ' + mergedProducts.length + ' продуктів.',
+        wasLimited ? "warning" : "success"
+      );
     } catch (error) {
       console.error("Shared product database import error:", error);
       showToast(`Не вдалося імпортувати базу продуктів: ${error.message}`, "error");
@@ -4530,7 +4608,7 @@ export default function App() {
                             className="search-food-item"
                             role="button"
                             tabIndex={0}
-                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSearchFood(food); } }}
+                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.currentTarget.click(); } }}
                             style={{ borderLeft: `4px solid ${borderCol}` }}
                             onClick={() => {
                               openCustomFoodForm({
@@ -4563,7 +4641,7 @@ export default function App() {
                           className="search-food-item"
                             role="button"
                             tabIndex={0}
-                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSearchFood(food); } }}
+                            onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.currentTarget.click(); } }}
                           style={{ borderLeft: '3px solid var(--color-water)' }}
                           onClick={() => {
                             setCustomFoodName(food.name);
@@ -5163,6 +5241,49 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="profile-grid-2col">
+                  <div className="settings-row">
+                    <span className="settings-label">Ваш вік:</span>
+                    <input
+                      type="number"
+                      min="14"
+                      max="100"
+                      className="settings-input"
+                      aria-label="Вік профілю"
+                      value={profile.age}
+                      onChange={(e) => handleProfileChange('age', e.target.value)}
+                    />
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">Стать для формули:</span>
+                    <select
+                      className="settings-input settings-select"
+                      aria-label="Стать для розрахунку"
+                      value={profile.gender}
+                      onChange={(e) => handleProfileChange('gender', e.target.value)}
+                    >
+                      <option value="female">Жіноча</option>
+                      <option value="male">Чоловіча</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Рівень активності:</span>
+                  <select
+                    className="settings-input settings-select"
+                    aria-label="Рівень активності"
+                    value={profile.activityLevel}
+                    onChange={(e) => handleProfileChange('activityLevel', e.target.value)}
+                  >
+                    <option value="sedentary">Мінімальна активність</option>
+                    <option value="light">Легка активність</option>
+                    <option value="moderate">Помірна активність</option>
+                    <option value="active">Висока активність</option>
+                    <option value="veryActive">Дуже висока активність</option>
+                  </select>
+                </div>
+
                 <div className="settings-row">
                   <span className="settings-label">Ваша фітнес-ціль:</span>
                   <select 
@@ -5285,6 +5406,7 @@ export default function App() {
                       type="number"
                       step="0.1"
                       className="settings-input"
+                      aria-label="Вага для запису, кг"
                       style={{ width: '100%' }}
                       value={weightInput}
                       onChange={(e) => setWeightInput(e.target.value)}
@@ -6106,28 +6228,28 @@ export default function App() {
 
             {/* Technical Information / Credits */}
             <div style={{ textAlign: 'center', padding: '15px 0', fontSize: '11px', color: 'var(--text-dark-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <p>NutriSnap v1.5.6 (Typography Polish)</p>
+              <p>NutriSnap v1.6.0</p>
               <p>Працює локально на вашому пристрої.</p>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if ('serviceWorker' in navigator) {
-                    navigator.serviceWorker.getRegistrations().then((registrations) => {
-                      for (let registration of registrations) {
-                        registration.unregister();
-                      }
-                      if ('caches' in window) {
-                        caches.keys().then((names) => {
-                          Promise.all(names.map(name => caches.delete(name))).then(() => {
-                            window.location.reload(true);
-                          });
-                        });
-                      } else {
-                        window.location.reload(true);
-                      }
-                    });
-                  } else {
-                    window.location.reload(true);
+                    const appScope = new URL(import.meta.env.BASE_URL, window.location.origin).href;
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(
+                      registrations
+                        .filter(registration => registration.scope.startsWith(appScope))
+                        .map(registration => registration.unregister())
+                    );
                   }
+                  if ('caches' in window) {
+                    const names = await caches.keys();
+                    await Promise.all(
+                      names
+                        .filter(name => name.startsWith('nutrisnap-cache-'))
+                        .map(name => caches.delete(name))
+                    );
+                  }
+                  window.location.reload();
                 }}
                 style={{
                   background: 'rgba(239, 68, 68, 0.1)',

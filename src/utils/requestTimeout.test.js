@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createRequestTimeout,
+  fetchJsonWithAbortTimeout,
   fetchWithAbortTimeout,
   isAbortError,
   sleepWithAbort
@@ -103,6 +104,29 @@ describe('request timeout utilities', () => {
     const assertion = expect(request).rejects.toMatchObject({
       name: 'AbortError',
       message: 'AI request timed out'
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps the timeout active while the response body is being read', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((resource, options) => Promise.resolve({
+      ok: true,
+      json: () => new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(options.signal.reason));
+      })
+    })));
+
+    const request = fetchJsonWithAbortTimeout('/slow-body', {}, {
+      timeoutMs: 100,
+      timeoutMessage: 'Response body timed out'
+    });
+    const assertion = expect(request).rejects.toMatchObject({
+      name: 'AbortError',
+      message: 'Response body timed out'
     });
 
     await vi.advanceTimersByTimeAsync(100);

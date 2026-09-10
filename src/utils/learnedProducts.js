@@ -1,7 +1,7 @@
 import { safeSetItem } from './storage.js';
 
 export const LEARNED_PRODUCTS_STORAGE_KEY = 'nutrisnap_learned_products';
-const MAX_ITEMS = 500;
+export const MAX_LEARNED_PRODUCTS = 500;
 
 export function getLearnedProducts() {
   try {
@@ -15,7 +15,10 @@ export function getLearnedProducts() {
 }
 
 export function setLearnedProducts(products = []) {
-  safeSetItem(LEARNED_PRODUCTS_STORAGE_KEY, JSON.stringify(products.slice(0, MAX_ITEMS)));
+  const limitedProducts = products.slice(0, MAX_LEARNED_PRODUCTS);
+  return safeSetItem(LEARNED_PRODUCTS_STORAGE_KEY, JSON.stringify(limitedProducts))
+    ? limitedProducts
+    : null;
 }
 
 export function normalizeLearnedProductKey(productOrName, brand = '') {
@@ -39,7 +42,7 @@ export function mergeLearnedProducts(products = []) {
 
   const merged = [...map.values()]
     .sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')))
-    .slice(0, MAX_ITEMS);
+    .slice(0, MAX_LEARNED_PRODUCTS);
 
   setLearnedProducts(merged);
   return merged;

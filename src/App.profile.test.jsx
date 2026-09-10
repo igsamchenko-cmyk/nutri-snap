@@ -95,4 +95,38 @@ describe('manual nutrition targets', () => {
     });
     expect(screen.getByText(/Денні нормативи - автоматичний розрахунок/)).toBeTruthy();
   });
+
+  it('shows every input used by the automatic formula and persists changes', async () => {
+    render(<App />);
+    openProfile();
+
+    fireEvent.change(screen.getByLabelText('Вік профілю'), { target: { value: '34' } });
+    fireEvent.change(screen.getByLabelText('Стать для розрахунку'), { target: { value: 'female' } });
+    fireEvent.change(screen.getByLabelText('Рівень активності'), { target: { value: 'light' } });
+
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem('nutrisnap_profile'))).toMatchObject({
+        age: '34',
+        gender: 'female',
+        activityLevel: 'light',
+        targetsMode: 'manual'
+      });
+    });
+  });
+
+  it('switches a manual profile to automatic targets when weight recalculation is confirmed', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<App />);
+    openProfile();
+
+    fireEvent.change(screen.getByLabelText('Вага для запису, кг'), { target: { value: '80' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Записати на сьогодні' }));
+
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem('nutrisnap_profile'));
+      expect(saved.weight).toBe(80);
+      expect(saved.targetsMode).toBe('auto');
+      expect(saved.targetCalories).not.toBe(legacyProfile.targetCalories);
+    });
+  });
 });

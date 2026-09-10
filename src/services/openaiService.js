@@ -12,7 +12,7 @@ import {
 import {
   AI_PHOTO_REQUEST_TIMEOUT_MESSAGE,
   AI_PHOTO_REQUEST_TIMEOUT_MS,
-  fetchWithAbortTimeout,
+  fetchJsonWithAbortTimeout,
   isAbortError
 } from '../utils/requestTimeout.js';
 import { filterValidAiNutritionResults, getValidatedAiNutritionResult } from './aiNutritionValidation.js';
@@ -30,6 +30,7 @@ const FOOD_SCAN_SCHEMA = {
     fat: { type: ['number', 'null'] },
     carbs: { type: ['number', 'null'] },
     weight: { type: 'number' },
+    nutritionBasis: { type: 'string', enum: ['serving', '100g'] },
     confidence: { type: 'number' },
     ingredients: { type: 'string' },
     dataQuality: { type: 'string', enum: ['estimate', 'label_read', 'insufficient'] },
@@ -43,6 +44,7 @@ const FOOD_SCAN_SCHEMA = {
     'fat',
     'carbs',
     'weight',
+    'nutritionBasis',
     'confidence',
     'ingredients',
     'dataQuality',
@@ -183,6 +185,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
   }
 
   let response;
+  let data;
   try {
     const headers = {
       'Content-Type': 'application/json'
@@ -192,7 +195,7 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
       headers.Authorization = `Bearer ${trimmedApiKey}`;
     }
 
-    response = await fetchWithAbortTimeout(useProxy ? requestUrl : OPENAI_RESPONSES_URL, {
+    const result = await fetchJsonWithAbortTimeout(useProxy ? requestUrl : OPENAI_RESPONSES_URL, {
       method: 'POST',
       headers,
       body: JSON.stringify(buildResponseBody(modelName, input, schemaName, schema, maxOutputTokens))
@@ -200,6 +203,8 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
       timeoutMs: options.timeoutMs,
       timeoutMessage: options.timeoutMessage
     });
+    response = result.response;
+    data = result.data;
   } catch (error) {
     if (isAbortError(error)) {
       throw error;
@@ -209,11 +214,9 @@ async function requestOpenAIResponse(modelName, input, apiKey, schemaName, schem
   }
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw handleOpenAIError(response, errorData);
+    throw handleOpenAIError(response, data || {});
   }
 
-  const data = await response.json();
   const textResponse = getOutputText(data);
 
   if (!textResponse) {
@@ -247,8 +250,9 @@ export async function analyzeFoodImageWithOpenAI(base64Data, apiKey, modelName =
 
     Правила точності:
     - Якщо це готова страва без етикетки, дай приблизну оцінку ваги та КБЖВ.
+      Значення КБЖВ мають стосуватися всієї вказаної ваги, nutritionBasis має бути "serving".
     - Якщо це упаковка, але таблиця харчової цінності нечітка, не вигадуй КБЖВ: calories/protein/fat/carbs мають бути null, dataQuality "insufficient", needsManualNutrition true.
-    - Якщо таблиця харчової цінності чітко читається, зчитай КБЖВ з етикетки, встанови dataQuality "label_read".
+    - Якщо таблиця харчової цінності чітко читається, зчитай КБЖВ на 100 г, встанови nutritionBasis "100g" і dataQuality "label_read".
     - Не використовуй загальні знання бренду як точні дані конкретної упаковки.
     - Поверни тільки дані, які відповідають JSON Schema.
   `;

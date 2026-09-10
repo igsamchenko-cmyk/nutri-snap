@@ -575,6 +575,13 @@ export function createFavoriteFromMealEntry(mealEntry = {}, options = {}) {
     DEFAULT_GRAMS
   );
   const totals = normalizeNutrition(options.totals) || getMealTotals(meal);
+  const per100g = nutritionFromServingValues(totals, servingGrams);
+  const foodSnapshot = meal.foodSnapshot
+    ? {
+        ...cloneFoodSnapshot(meal.foodSnapshot),
+        per100g: per100g ? { ...per100g } : null
+      }
+    : createFoodSnapshot({ ...meal, per100g });
 
   return normalizeFavoriteFood({
     ...meal,
@@ -584,7 +591,8 @@ export function createFavoriteFromMealEntry(mealEntry = {}, options = {}) {
     source: options.source || meal.source,
     confidence: options.confidence ?? meal.confidence,
     warning: options.warning ?? meal.warning,
-    foodSnapshot: meal.foodSnapshot ? cloneFoodSnapshot(meal.foodSnapshot) : null,
+    per100g,
+    foodSnapshot,
     totals,
     calories: totals.calories,
     protein: totals.protein,
@@ -602,12 +610,21 @@ export function createMealEntryFromFavorite(favorite = {}, options = {}) {
     options.servingGrams ?? options.weight ?? normalizedFavorite.servingGrams ?? normalizedFavorite.weight,
     DEFAULT_GRAMS
   );
-  const totals = normalizeNutrition(options.totals) || normalizeNutrition(normalizedFavorite.totals) || normalizeNutritionWithDefaults(normalizedFavorite);
   const source = options.source || normalizedFavorite.source || 'manual';
   const dataQuality = options.dataQuality || normalizedFavorite.dataQuality || (source === 'manual' ? 'manual' : 'unknown');
   const per100g = normalizeNutrition(normalizedFavorite.per100g)
     || normalizeNutrition(normalizedFavorite.foodSnapshot?.per100g)
-    || nutritionFromServingValues(totals, servingGrams);
+    || nutritionFromServingValues(normalizedFavorite.totals, normalizedFavorite.servingGrams);
+  const savedServingGrams = parsePositiveNumber(
+    normalizedFavorite.servingGrams ?? normalizedFavorite.weight,
+    servingGrams
+  );
+  const savedTotals = normalizeNutrition(normalizedFavorite.totals);
+  const totals = normalizeNutrition(options.totals)
+    || (Math.abs(savedServingGrams - servingGrams) < 0.001 ? savedTotals : null)
+    || (per100g ? scaleNutritionPer100g(per100g, servingGrams) : null)
+    || savedTotals
+    || normalizeNutritionWithDefaults(normalizedFavorite);
   const meal = createManualMealEntry({
     ...normalizedFavorite,
     source,
