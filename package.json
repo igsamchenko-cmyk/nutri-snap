@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
+    "update:off-ukraine": "node scripts/openFoodFactsSnapshot.mjs",
     "worker:login": "wrangler login",
     "worker:whoami": "wrangler whoami",
     "worker:dev": "wrangler dev",

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { catalogDiagnostics, normalizeProductSearchText, productCatalog } from './index.js';
 import { getCatalogIdentity } from './catalogPipeline.js';
+import {
+  OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META,
+  openFoodFactsUkraineSnapshot
+} from './openFoodFactsUkraineSnapshot.js';
 
 describe('local product catalogue metadata', () => {
   it('marks every entry as per-100g nutrition with canonical values', () => {
@@ -59,5 +63,13 @@ describe('local product catalogue metadata', () => {
     expect(egg).toMatchObject({ calories: 144, weight: 50, nutritionBasis: '100g' });
     expect(banana).toMatchObject({ calories: 89, weight: 120, nutritionBasis: '100g' });
     expect(sugar).toMatchObject({ calories: 400, carbs: 100, weight: 5, nutritionBasis: '100g' });
+  });
+
+  it('ships a dated Ukrainian Open Food Facts snapshot with unique barcodes', () => {
+    expect(OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.count).toBe(openFoodFactsUkraineSnapshot.length);
+    expect(openFoodFactsUkraineSnapshot.length).toBeGreaterThanOrEqual(500);
+    expect(new Set(openFoodFactsUkraineSnapshot.map(product => product.barcode)).size)
+      .toBe(openFoodFactsUkraineSnapshot.length);
   });
 });
