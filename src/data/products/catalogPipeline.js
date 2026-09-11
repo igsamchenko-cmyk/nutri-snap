@@ -2,6 +2,7 @@ const REQUIRED_NUTRITION_FIELDS = ['calories', 'protein', 'fat', 'carbs'];
 
 const SOURCE_PRIORITY = {
   'ua-import': 100,
+  openfoodfacts: 95,
   'ua-core': 90,
   'ua-retail': 80,
   'ua-atb': 75,
@@ -102,6 +103,10 @@ export function getCatalogIdentity(product = {}) {
   const barcode = String(product.barcode || '').trim();
   if (barcode) return `barcode:${barcode}`;
 
+  return getCatalogNameIdentity(product);
+}
+
+function getCatalogNameIdentity(product = {}) {
   return [
     'name',
     normalizeProductSearchText(product.name),
@@ -197,6 +202,7 @@ function mergeDuplicateProducts(current, candidate) {
 
 export function buildProductCatalog(rawProducts = []) {
   const productsByIdentity = new Map();
+  const identityByName = new Map();
   const invalidEntries = [];
   let duplicateCount = 0;
 
@@ -208,14 +214,31 @@ export function buildProductCatalog(rawProducts = []) {
       return;
     }
 
-    const existing = productsByIdentity.get(product.catalogIdentity);
+    const nameIdentity = getCatalogNameIdentity(product);
+    const barcodeMatch = productsByIdentity.get(product.catalogIdentity);
+    const nameMatchIdentity = identityByName.get(nameIdentity);
+    const nameMatch = nameMatchIdentity ? productsByIdentity.get(nameMatchIdentity) : null;
+    const hasDifferentBarcodes = Boolean(
+      nameMatch?.barcode
+      && product.barcode
+      && String(nameMatch.barcode) !== String(product.barcode)
+    );
+    const existing = barcodeMatch || (!hasDifferentBarcodes ? nameMatch : null);
+    const existingIdentity = barcodeMatch ? product.catalogIdentity : nameMatchIdentity;
+
     if (existing) {
       duplicateCount += 1;
-      productsByIdentity.set(product.catalogIdentity, mergeDuplicateProducts(existing, product));
+      const merged = mergeDuplicateProducts(existing, product);
+      const mergedIdentity = getCatalogIdentity(merged);
+      if (existingIdentity !== mergedIdentity) productsByIdentity.delete(existingIdentity);
+      productsByIdentity.set(mergedIdentity, merged);
+      identityByName.set(getCatalogNameIdentity(existing), mergedIdentity);
+      identityByName.set(nameIdentity, mergedIdentity);
       return;
     }
 
     productsByIdentity.set(product.catalogIdentity, product);
+    if (!identityByName.has(nameIdentity)) identityByName.set(nameIdentity, product.catalogIdentity);
   });
 
   return {

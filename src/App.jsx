@@ -253,6 +253,18 @@ const getFoodPortionKey = (food) => {
   return `name:${normalizeSearchText([food.name, food.brand].filter(Boolean).join(' '))}`;
 };
 
+const deduplicateFoods = (foods) => {
+  const uniqueFoods = new Map();
+  foods.forEach(food => {
+    const barcode = String(food?.barcode || '').trim();
+    const key = barcode
+      ? `barcode:${barcode}`
+      : `name:${normalizeSearchText(food?.name)}|brand:${normalizeSearchText(food?.brand)}`;
+    if (!uniqueFoods.has(key)) uniqueFoods.set(key, food);
+  });
+  return Array.from(uniqueFoods.values());
+};
+
 const getQuickPortionPresets = (baseWeight = 100, name = '', preferredWeight = null) => {
   const normalizedName = normalizeSearchText(name);
   const presets = new Map();
@@ -2334,7 +2346,7 @@ export default function App() {
   };
 
   // Об'єднана база продуктів: learned + вбудовані + користувацькі без штрих-коду + користувацькі зі штрих-кодом
-  const combinedFoods = useMemo(() => [
+  const combinedFoods = useMemo(() => deduplicateFoods([
     ...learnedProducts.map(f => ({
       ...f,
       isLearned: true,
@@ -2359,7 +2371,7 @@ export default function App() {
     })),
     ...productCatalog,
     ...mockFoods
-  ], [learnedProducts, normalizedCustomFoods, customBarcodes]);
+  ]), [learnedProducts, normalizedCustomFoods, customBarcodes]);
 
   const recentFoods = useMemo(() => getRecentFoods(normalizedMeals, selectedDate), [normalizedMeals, selectedDate]);
   const searchLibrary = useMemo(() => {
@@ -2416,7 +2428,7 @@ export default function App() {
     }
     if (selectedCategoryFilter === 'Часті') return getFoodUsageCount(food) > 0;
     if (selectedCategoryFilter === 'Супермаркети') {
-      if (food.supermarket || food.source === 'ua-seed') return true;
+      if (food.supermarket || food.source === 'ua-seed' || food.source === 'openfoodfacts') return true;
       const isSupermarket = food.brand && (
         food.brand.includes('АТБ') || 
         food.brand.includes('Сільпо') || 

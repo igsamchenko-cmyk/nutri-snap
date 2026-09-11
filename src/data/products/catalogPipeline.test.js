@@ -58,4 +58,20 @@ describe('catalog quality pipeline', () => {
     expect(result.products).toHaveLength(2);
     expect(result.diagnostics.duplicateCount).toBe(0);
   });
+
+  it('replaces an unsourced duplicate with the matching barcoded product', () => {
+    const result = buildProductCatalog([
+      makeProduct({ aliases: ['рис готовий'] }),
+      makeProduct({
+        id: 'food-2',
+        barcode: '4820000000001',
+        source: 'openfoodfacts',
+        sourceUrl: 'https://world.openfoodfacts.org/product/4820000000001'
+      })
+    ]);
+
+    expect(result.products).toHaveLength(1);
+    expect(result.products[0]).toMatchObject({ id: 'food-2', barcode: '4820000000001' });
+    expect(result.products[0].aliases).toContain('рис готовий');
+  });
 });

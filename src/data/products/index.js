@@ -4,6 +4,7 @@ import { ukrainianProductSeeds } from '../ukrainianProductSeeds.js';
 import { everydayUkrainianProducts } from './everydayUkrainianProducts.js';
 import { expandedUkrainianProducts } from './expandedUkrainianProducts.js';
 import { importedProducts } from './importedProducts.js';
+import { openFoodFactsUkraineSnapshot } from './openFoodFactsUkraineSnapshot.js';
 import { retailUkrainianProducts } from './retailUkrainianProducts.js';
 import { buildProductCatalog } from './catalogPipeline.js';
 
@@ -14,6 +15,7 @@ const rawProductCatalog = [
   ...expandedUkrainianProducts,
   ...everydayUkrainianProducts,
   ...retailUkrainianProducts,
+  ...openFoodFactsUkraineSnapshot,
   ...importedProducts
 ];
 
