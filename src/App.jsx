@@ -49,6 +49,10 @@ import {
 } from './services/openaiService';
 import { mockFoods } from './data/mockFood';
 import { normalizeProductSearchText, productCatalog } from './data/products';
+import {
+  loadExtendedProductCatalog,
+  OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META
+} from './data/products/extendedCatalog';
 import { GEMINI_MODEL_OPTIONS } from './constants';
 import {
   getProductByBarcode,
@@ -682,6 +686,9 @@ export default function App() {
   const [barcodeError, setBarcodeError] = useState(null);
   const [isBarcodeScanning, setIsBarcodeScanning] = useState(false);
   const [isBarcodeLiveScannerOpen, setIsBarcodeLiveScannerOpen] = useState(false);
+  const [extendedProductCatalog, setExtendedProductCatalog] = useState([]);
+  const [extendedCatalogStatus, setExtendedCatalogStatus] = useState('idle');
+  const extendedProductCatalogRef = useRef([]);
 
   // --- States for Custom Barcodes & Custom Foods ---
   const [customBarcodes, setCustomBarcodes] = useLocalStorageState('nutrisnap_custom_barcodes', {});
@@ -914,6 +921,52 @@ export default function App() {
     setSelectedSearchFood(food);
     setSearchFoodWeight(getPreferredFoodWeight(food, food?.weight));
   };
+
+  const ensureExtendedProductCatalog = async () => {
+    if (extendedProductCatalogRef.current.length > 0) {
+      return extendedProductCatalogRef.current;
+    }
+
+    setExtendedCatalogStatus('loading');
+    try {
+      const catalogBuild = await loadExtendedProductCatalog();
+      extendedProductCatalogRef.current = catalogBuild.products;
+      setExtendedProductCatalog(catalogBuild.products);
+      setExtendedCatalogStatus('ready');
+      return catalogBuild.products;
+    } catch (error) {
+      setExtendedCatalogStatus('error');
+      throw error;
+    }
+  };
+
+  // Великий каталог не затримує запуск застосунку й підвантажується при відкритті сканера.
+  useEffect(() => {
+    if (activeTab !== 'scanner') return;
+    if (extendedProductCatalogRef.current.length > 0) {
+      setExtendedProductCatalog(extendedProductCatalogRef.current);
+      setExtendedCatalogStatus('ready');
+      return;
+    }
+
+    let cancelled = false;
+    setExtendedCatalogStatus('loading');
+    loadExtendedProductCatalog()
+      .then(catalogBuild => {
+        extendedProductCatalogRef.current = catalogBuild.products;
+        if (cancelled) return;
+        setExtendedProductCatalog(catalogBuild.products);
+        setExtendedCatalogStatus('ready');
+      })
+      .catch(error => {
+        console.error('Не вдалося завантажити розширений каталог:', error);
+        if (!cancelled) setExtendedCatalogStatus('error');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   // Захист від фантомних натискань (ghost click protection) при відкритті сканера або зміні режимів
   useEffect(() => {
@@ -1225,11 +1278,20 @@ export default function App() {
       const providerStartedAt = getAiPerformanceNow();
       const result = await analyzeFoodWithCurrentProvider(imageDataBase64);
       logAiPerformance('provider + validation', providerStartedAt, { provider: scanMode });
+      let extendedFoods = extendedProductCatalogRef.current;
+      if (extendedFoods.length === 0) {
+        try {
+          extendedFoods = await ensureExtendedProductCatalog();
+        } catch (error) {
+          console.warn('Розширений каталог недоступний для локального зіставлення:', error);
+        }
+      }
       const localNutritionMatch = findBestFoodMatchByName(result.name, [
         ...Object.values(customBarcodes).map(food => ({ ...food, isCustomBarcode: true })),
         ...normalizedCustomFoods.map(food => ({ ...food, isCustom: true })),
         ...learnedProducts.map(food => ({ ...food, isLearned: true })),
         ...productCatalog,
+        ...extendedFoods,
         ...mockFoods
       ]);
 
@@ -1555,6 +1617,21 @@ export default function App() {
       console.log("Знайдено продукт в локальній базі штрих-кодів:", customBarcodes[cleanBarcode]);
       return customBarcodes[cleanBarcode];
     }
+
+    const coreProduct = productCatalog.find(product => product.barcode === cleanBarcode);
+    if (coreProduct) return coreProduct;
+
+    let extendedFoods = extendedProductCatalogRef.current;
+    if (extendedFoods.length === 0) {
+      try {
+        extendedFoods = await ensureExtendedProductCatalog();
+      } catch (error) {
+        console.warn('Розширений каталог недоступний для пошуку штрих-коду:', error);
+      }
+    }
+    const extendedProduct = extendedFoods.find(product => product.barcode === cleanBarcode);
+    if (extendedProduct) return extendedProduct;
+
     return await getProductByBarcode(cleanBarcode);
   };
 
@@ -2370,8 +2447,9 @@ export default function App() {
       icon: "🏷️"
     })),
     ...productCatalog,
+    ...extendedProductCatalog,
     ...mockFoods
-  ]), [learnedProducts, normalizedCustomFoods, customBarcodes]);
+  ]), [learnedProducts, normalizedCustomFoods, customBarcodes, extendedProductCatalog]);
 
   const recentFoods = useMemo(() => getRecentFoods(normalizedMeals, selectedDate), [normalizedMeals, selectedDate]);
   const searchLibrary = useMemo(() => {
@@ -2510,26 +2588,29 @@ export default function App() {
   }, [indexedCombinedFoods, searchTokens, showSuggestions, favoriteNameSet, mealUsageStats, normalizedSearchQuery]);
 
   const databaseStats = useMemo(() => {
-    const sourceCounts = productCatalog.reduce((acc, food) => {
+    const sourceCounts = [...productCatalog, ...extendedProductCatalog].reduce((acc, food) => {
       const source = food.sourceLabel || food.source || food.supermarket || food.brand || "Каталог";
       acc[source] = (acc[source] || 0) + 1;
       return acc;
     }, {});
+    if (extendedProductCatalog.length === 0) {
+      sourceCounts['Open Food Facts · Україна'] = OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.count;
+    }
 
     const verifiedCustomFoods = customFoods.filter(hasCompleteNutritionValues).length;
     const verifiedBarcodes = Object.values(customBarcodes).filter(hasCompleteNutritionValues).length;
 
     return {
-      catalog: productCatalog.length,
+      catalog: OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.combinedCount,
       demo: mockFoods.length,
       custom: customFoods.length,
       customBarcodes: Object.keys(customBarcodes).length,
       learned: learnedProducts.length,
       verifiedCustom: verifiedCustomFoods + verifiedBarcodes,
-      total: productCatalog.length + mockFoods.length + customFoods.length + Object.keys(customBarcodes).length + learnedProducts.length,
+      total: OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.combinedCount + mockFoods.length + customFoods.length + Object.keys(customBarcodes).length + learnedProducts.length,
       topSources: Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 4)
     };
-  }, [customFoods, customBarcodes, learnedProducts]);
+  }, [customFoods, customBarcodes, learnedProducts, extendedProductCatalog]);
   // Оновлення ваги страви з пропорційним перерахунком КБЖВ
   const handleUpdateMealWeight = (mealId, value) => {
     setMeals(prevMeals => prevMeals.map(meal => {
@@ -4357,6 +4438,16 @@ export default function App() {
 
             {scannerMode === 'search' && (
               <div className="search-db-container">
+                {extendedCatalogStatus === 'loading' && (
+                  <div role="status" style={{ marginBottom: '12px', fontSize: '12px', color: 'var(--text-dark-muted)' }}>
+                    Завантажуємо розширену локальну базу продуктів...
+                  </div>
+                )}
+                {extendedCatalogStatus === 'error' && (
+                  <div role="status" style={{ marginBottom: '12px', fontSize: '12px', color: '#f59e0b' }}>
+                    Розширена база тимчасово недоступна. Основний каталог і пошук у мережі працюють.
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                   <button
                     className="btn-primary"

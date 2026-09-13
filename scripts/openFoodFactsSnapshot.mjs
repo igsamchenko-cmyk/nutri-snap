@@ -1,12 +1,16 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { buildProductCatalog } from '../src/data/products/catalogPipeline.js';
+import { productCatalog } from '../src/data/products/index.js';
+import { openFoodFactsUkraineSnapshot as existingSnapshot } from '../src/data/products/openFoodFactsUkraineSnapshot.js';
 
-const API_URL = 'https://ua.openfoodfacts.org/api/v2/search';
+const API_URL = 'https://search.openfoodfacts.org/search';
 const DEFAULT_OUTPUT = resolve('src/data/products/openFoodFactsUkraineSnapshot.js');
-const DEFAULT_TARGET = 600;
-const DEFAULT_PAGE_SIZE = 100;
-const DEFAULT_DELAY_MS = 6500;
+const DEFAULT_META_OUTPUT = resolve('src/data/products/openFoodFactsUkraineSnapshotMeta.js');
+const DEFAULT_TARGET = 3000;
+const DEFAULT_PAGE_SIZE = 500;
+const DEFAULT_DELAY_MS = 1500;
 const MAX_ATTEMPTS = 5;
 const USER_AGENT = 'NutriSnap/1.6 (https://github.com/igsamchenko-cmyk/nutri-snap)';
 const REQUEST_FIELDS = [
@@ -14,6 +18,7 @@ const REQUEST_FIELDS = [
   'product_name',
   'product_name_uk',
   'product_name_ru',
+  'generic_name',
   'generic_name_uk',
   'generic_name_ru',
   'brands',
@@ -22,7 +27,11 @@ const REQUEST_FIELDS = [
   'data_quality_errors_tags',
   'completeness',
   'last_modified_t'
-].join(',');
+];
+const SEARCH_QUERIES = [
+  { label: 'продаються в Україні', query: 'countries_tags:"en:ukraine"' },
+  { label: 'українські штрихкоди', query: 'code:482*' }
+];
 
 const sleep = milliseconds => new Promise(resolvePromise => setTimeout(resolvePromise, milliseconds));
 
@@ -54,6 +63,7 @@ export function normalizeOpenFoodFactsProduct(product = {}) {
     product.product_name_uk,
     product.product_name,
     product.product_name_ru,
+    product.generic_name,
     product.generic_name_uk,
     product.generic_name_ru
   ]);
@@ -74,8 +84,6 @@ export function normalizeOpenFoodFactsProduct(product = {}) {
   if (nutrition.some(value => value === null || value < 0)) return null;
   if (energyKcal > 1000 || protein > 100 || fat > 100 || carbs > 100) return null;
   if (protein + fat + carbs > 105) return null;
-  if (getNumber(product.completeness) !== null && Number(product.completeness) < 0.5) return null;
-
   const aliases = nameCandidates.slice(1);
   const supermarket = String(product.stores || '').split(',')[0].trim();
 
@@ -127,12 +135,6 @@ const rows = [
 ${rows}
 ];
 
-export const OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META = {
-  date: '${snapshotDate}',
-  count: rows.length,
-  sourceUrl: 'https://world.openfoodfacts.org/'
-};
-
 export const openFoodFactsUkraineSnapshot = rows.map(([
   barcode,
   name,
@@ -169,6 +171,23 @@ export const openFoodFactsUkraineSnapshot = rows.map(([
 `;
 }
 
+export function renderSnapshotMetaModule(
+  products,
+  snapshotDate = new Date().toISOString().slice(0, 10),
+  combinedCount = products.length
+) {
+  return [
+    '// Generated together with openFoodFactsUkraineSnapshot.js by npm run update:off-ukraine.',
+    'export const OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META = {',
+    "  date: '" + snapshotDate + "',",
+    '  count: ' + products.length + ',',
+    '  combinedCount: ' + combinedCount + ',',
+    "  sourceUrl: 'https://world.openfoodfacts.org/'",
+    '};',
+    ''
+  ].join('\n');
+}
+
 function parseArguments(argv) {
   const options = Object.fromEntries(argv.map(argument => {
     const [key, value = 'true'] = argument.replace(/^--/, '').split('=');
@@ -177,26 +196,31 @@ function parseArguments(argv) {
 
   return {
     target: Math.max(1, Number(options.target) || DEFAULT_TARGET),
-    pageSize: Math.min(100, Math.max(1, Number(options['page-size']) || DEFAULT_PAGE_SIZE)),
-    maxPages: Math.max(1, Number(options['max-pages']) || 10),
+    pageSize: Math.min(500, Math.max(1, Number(options['page-size']) || DEFAULT_PAGE_SIZE)),
+    maxPages: Math.min(20, Math.max(1, Number(options['max-pages']) || 10)),
     delayMs: Math.max(DEFAULT_DELAY_MS, Number(options.delay) || DEFAULT_DELAY_MS),
-    output: resolve(options.output || DEFAULT_OUTPUT)
+    output: resolve(options.output || DEFAULT_OUTPUT),
+    metaOutput: resolve(options['meta-output'] || DEFAULT_META_OUTPUT)
   };
 }
 
-async function fetchPage(page, pageSize, delayMs) {
-  const url = new URL(API_URL);
-  url.search = new URLSearchParams({
-    countries_tags_en: 'ukraine',
-    states_tags: 'nutrition-facts-completed',
-    sort_by: 'popularity_key',
-    fields: REQUEST_FIELDS,
-    page: String(page),
-    page_size: String(pageSize)
-  });
-
+async function fetchPage(searchQuery, page, pageSize, delayMs) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': USER_AGENT
+      },
+      body: JSON.stringify({
+        q: searchQuery,
+        fields: REQUEST_FIELDS,
+        langs: ['uk', 'ru', 'en'],
+        page,
+        page_size: pageSize,
+        sort_by: '-last_modified_t'
+      })
+    });
     const contentType = response.headers.get('content-type') || '';
     if (response.ok && contentType.includes('application/json')) return response.json();
 
@@ -204,7 +228,7 @@ async function fetchPage(page, pageSize, delayMs) {
       throw new Error(`Open Food Facts request failed with HTTP ${response.status}.`);
     }
 
-    const retryDelay = Math.max(delayMs, attempt * 15000);
+    const retryDelay = Math.max(delayMs, attempt * 5000);
     console.warn(`Page ${page}: HTTP ${response.status}, retrying in ${Math.round(retryDelay / 1000)} s.`);
     await sleep(retryDelay);
   }
@@ -212,34 +236,51 @@ async function fetchPage(page, pageSize, delayMs) {
   return null;
 }
 
+async function saveSnapshot(options, productsByBarcode) {
+  const products = Array.from(productsByBarcode.values()).slice(0, options.target);
+  const combinedCount = buildProductCatalog([...productCatalog, ...products]).products.length;
+  const snapshotDate = new Date().toISOString().slice(0, 10);
+  await Promise.all([
+    writeFile(options.output, renderSnapshotModule(products, snapshotDate), 'utf8'),
+    writeFile(options.metaOutput, renderSnapshotMetaModule(products, snapshotDate, combinedCount), 'utf8')
+  ]);
+  return products;
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
-  const productsByBarcode = new Map();
+  const productsByBarcode = new Map(existingSnapshot.map(product => [product.barcode, product]));
+  let requestCount = 0;
 
-  for (let page = 1; page <= options.maxPages && productsByBarcode.size < options.target; page += 1) {
-    let response;
-    try {
-      response = await fetchPage(page, options.pageSize, options.delayMs);
-    } catch (error) {
-      if (productsByBarcode.size === 0) throw error;
-      console.warn(`${error.message} Saving the ${productsByBarcode.size} products already collected.`);
-      break;
+  console.log(`Starting with ${productsByBarcode.size} products from the current snapshot.`);
+  for (const searchQuery of SEARCH_QUERIES) {
+    for (let page = 1; page <= options.maxPages && productsByBarcode.size < options.target; page += 1) {
+      if (requestCount > 0) await sleep(options.delayMs);
+      requestCount += 1;
+
+      let response;
+      try {
+        response = await fetchPage(searchQuery.query, page, options.pageSize, options.delayMs);
+      } catch (error) {
+        console.warn(`${searchQuery.label}: ${error.message} Moving to the next query.`);
+        break;
+      }
+      const pageProducts = Array.isArray(response?.hits) ? response.hits : [];
+      pageProducts.forEach(product => {
+        const normalized = normalizeOpenFoodFactsProduct(product);
+        if (normalized) productsByBarcode.set(normalized.barcode, normalized);
+      });
+
+      console.log(`${searchQuery.label}, page ${page}: ${productsByBarcode.size} valid unique products from ${response?.count || 'unknown'} matches.`);
+      await saveSnapshot(options, productsByBarcode);
+      if (pageProducts.length < options.pageSize) break;
     }
-    const pageProducts = Array.isArray(response?.products) ? response.products : [];
-    pageProducts.forEach(product => {
-      const normalized = normalizeOpenFoodFactsProduct(product);
-      if (normalized) productsByBarcode.set(normalized.barcode, normalized);
-    });
-
-    console.log(`Page ${page}: ${productsByBarcode.size} valid unique products.`);
-    if (pageProducts.length < options.pageSize) break;
-    if (productsByBarcode.size < options.target) await sleep(options.delayMs);
+    if (productsByBarcode.size >= options.target) break;
   }
 
-  const products = Array.from(productsByBarcode.values()).slice(0, options.target);
+  const products = await saveSnapshot(options, productsByBarcode);
   if (products.length === 0) throw new Error('Open Food Facts returned no valid Ukrainian products.');
 
-  await writeFile(options.output, renderSnapshotModule(products), 'utf8');
   console.log(`Saved ${products.length} products to ${options.output}.`);
 }
 

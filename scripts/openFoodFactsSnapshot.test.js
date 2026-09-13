@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeOpenFoodFactsProduct, renderSnapshotModule } from './openFoodFactsSnapshot.mjs';
+import {
+  normalizeOpenFoodFactsProduct,
+  renderSnapshotMetaModule,
+  renderSnapshotModule
+} from './openFoodFactsSnapshot.mjs';
 
 const product = {
   code: '4820000000001',
@@ -56,12 +60,21 @@ describe('Open Food Facts Ukraine snapshot generator', () => {
     })).toBeNull();
   });
 
+  it('keeps complete plausible nutrition when unrelated profile fields are incomplete', () => {
+    expect(normalizeOpenFoodFactsProduct({
+      ...product,
+      completeness: 0.2
+    })).not.toBeNull();
+  });
+
   it('renders a compact reusable module with license metadata', () => {
     const normalized = normalizeOpenFoodFactsProduct(product);
     const output = renderSnapshotModule([normalized], '2026-09-11');
 
     expect(output).toContain('ODbL 1.0');
-    expect(output).toContain("date: '2026-09-11'");
     expect(output).toContain('off-ua-${barcode}');
+    expect(renderSnapshotMetaModule([normalized], '2026-09-11')).toContain("date: '2026-09-11'");
+    expect(renderSnapshotMetaModule([normalized], '2026-09-11')).toContain('count: 1');
+    expect(renderSnapshotMetaModule([normalized], '2026-09-11', 42)).toContain('combinedCount: 42');
   });
 });
