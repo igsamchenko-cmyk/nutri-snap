@@ -6,7 +6,9 @@ NutriSnap is a mobile-first React/Vite app for tracking meals, water intake, cal
 
 NutriSnap searches packaged foods through Open Food Facts and stores selected results locally on the user's device. Open Food Facts data is available under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/). Product cards keep their source metadata, and users should verify nutrition values against the product label.
 
-The repository also contains a compact Ukrainian Open Food Facts snapshot for offline name and barcode search. It includes only records with complete plausible per-100 g nutrition and no Open Food Facts quality errors. The default refresh collects 600 popular Ukrainian products within the public search pagination limits. The command identifies itself with a User-Agent, keeps at least 6.5 seconds between requests, and saves valid rows already collected if a later page becomes unavailable.
+The repository also contains a compact Ukrainian Open Food Facts snapshot for local name and barcode search. It includes only records with a valid barcode, a product name, complete plausible per-100 g nutrition, and no Open Food Facts quality errors. The default refresh combines products tagged as sold in Ukraine with GS1 Ukraine barcode prefix 482, deduplicates them by barcode, and targets 3,000 valid products. It uses the official Search-a-licious API with pages of up to 500 results, identifies itself with a User-Agent, throttles requests, and saves a checkpoint after every page.
+
+The large snapshot is emitted as a separate lazy-loaded application chunk. The dashboard starts with the smaller curated catalogue; the extended snapshot loads when the user opens the scanner or product search, then participates in local name matching and barcode lookup before any network fallback.
 
 ```bash
 npm run update:off-ukraine

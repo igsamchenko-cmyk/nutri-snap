@@ -127,9 +127,13 @@ export default defineConfig(({ mode }) => {
             if (id.includes('node_modules/lucide-react')) {
               return 'vendor-icons';
             }
-            // База продуктів → окремий chunk (108KB, рідко змінюється)
+            // Великий знімок Open Food Facts лишається окремим відкладеним chunk.
+            if (id.includes('/src/data/products/openFoodFactsUkraineSnapshot.js')) {
+              return;
+            }
+            // Основна база продуктів → окремий chunk, рідко змінюється
             if (id.includes('/src/data/products') || id.includes('/src/data/ukrainianProductSeeds')) {
-              return 'data-products';
+              return 'data-products-core';
             }
             // AI-сервіси → окремий chunk
             if (id.includes('/src/services/')) {
