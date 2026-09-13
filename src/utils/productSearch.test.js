@@ -10,6 +10,7 @@ const food = {
   brand: 'Приклад',
   barcode: '4820000000001',
   aliases: ['Молоко 2.5%'],
+  productType: 'Молочне',
   calories: 52,
   protein: 2.8,
   fat: 2.5,
@@ -23,6 +24,7 @@ describe('product search quality', () => {
     expect(text).toContain('4820000000001');
     expect(text).toContain('молоко 2 5');
     expect(text).toContain('приклад');
+    expect(text).toContain('молочне');
   });
 
   it('prioritizes exact barcode, name and alias matches', () => {

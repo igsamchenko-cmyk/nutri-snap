@@ -1,3 +1,5 @@
+import { inferProductType } from './productType.js';
+
 const REQUIRED_NUTRITION_FIELDS = ['calories', 'protein', 'fat', 'carbs'];
 
 const SOURCE_PRIORITY = {
@@ -93,6 +95,7 @@ function buildSearchText(product) {
     product.brand,
     product.supermarket,
     product.category,
+    product.productType,
     ...product.aliases,
     ...stateAliases,
     product.searchText
@@ -120,6 +123,7 @@ function getCatalogNameIdentity(product = {}) {
 export function normalizeCatalogProduct(product = {}, index = 0) {
   const aliases = normalizeProductAliases(product.aliases);
   const preparationState = inferPreparationState({ ...product, aliases });
+  const productType = inferProductType({ ...product, aliases });
   const per100g = Object.fromEntries(
     REQUIRED_NUTRITION_FIELDS.map(field => [field, getNutrition(product, field)])
   );
@@ -131,6 +135,7 @@ export function normalizeCatalogProduct(product = {}, index = 0) {
     brand: String(product.brand || '').trim(),
     supermarket: String(product.supermarket || '').trim(),
     category: String(product.category || 'Інше').trim(),
+    productType,
     aliases,
     preparationState,
     nutritionBasis: '100g',

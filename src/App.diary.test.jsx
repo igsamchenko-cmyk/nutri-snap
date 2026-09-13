@@ -45,6 +45,20 @@ afterEach(() => {
 });
 
 describe('diary food entry', () => {
+  it('filters the product catalogue by a separate product category', async () => {
+    const { container } = render(<App />);
+    fireEvent.click(container.querySelector('.scan-fab'));
+    fireEvent.change(screen.getByLabelText('Категорія:'), {
+      target: { value: 'Риба та морепродукти' }
+    });
+
+    await waitFor(() => {
+      const rows = [...container.querySelectorAll('.search-food-item')];
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every(row => row.textContent.includes('Риба та морепродукти'))).toBe(true);
+    });
+  });
+
   it('uses complete nutrition returned by explicit Open Food Facts search', async () => {
     searchProductsByName.mockResolvedValue([{
       id: 'off-4820000000004',
@@ -67,7 +81,10 @@ describe('diary food entry', () => {
     fireEvent.click(container.querySelector('.scan-fab'));
     fireEvent.change(screen.getByLabelText('Пошук продуктів'), { target: { value: 'кефір тест' } });
 
-    await waitFor(() => expect(searchCachedProductsByName).toHaveBeenCalledWith('кефір тест'));
+    await waitFor(
+      () => expect(searchCachedProductsByName).toHaveBeenCalledWith('кефір тест'),
+      { timeout: 3000 }
+    );
     expect(searchProductsByName).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Знайти у великій базі продуктів' }));

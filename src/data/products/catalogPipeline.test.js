@@ -26,6 +26,13 @@ describe('catalog quality pipeline', () => {
     expect(inferPreparationState({ name: 'Макарони варені' })).toBe('cooked');
   });
 
+  it('adds a separate product type to normalized catalogue entries', () => {
+    const product = normalizeCatalogProduct(makeProduct({ name: 'Rice noodles', aliases: ['рисова локшина'] }));
+
+    expect(product.productType).toBe('Крупи та макарони');
+    expect(product.searchText).toContain('крупи та макарони');
+  });
+
   it('rejects impossible nutrition values', () => {
     const product = normalizeCatalogProduct(makeProduct({ protein: 120 }));
 

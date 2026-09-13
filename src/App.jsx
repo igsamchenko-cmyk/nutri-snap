@@ -48,7 +48,13 @@ import {
   searchSmartProductsWithOpenAI
 } from './services/openaiService';
 import { mockFoods } from './data/mockFood';
-import { normalizeProductSearchText, productCatalog } from './data/products';
+import {
+  ALL_PRODUCT_TYPES,
+  PRODUCT_TYPES,
+  inferProductType,
+  normalizeProductSearchText,
+  productCatalog
+} from './data/products';
 import {
   loadExtendedProductCatalog,
   OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META
@@ -358,6 +364,7 @@ export default function App() {
   // --- States for Database Search ---
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('Усі');
+  const [selectedProductType, setSelectedProductType] = useState(ALL_PRODUCT_TYPES);
   const [foodSortOption, setFoodSortOption] = useState('rank');
   const [selectedSearchFood, setSelectedSearchFood] = useState(null);
   const [searchFoodWeight, setSearchFoodWeight] = useState(100);
@@ -2423,11 +2430,14 @@ export default function App() {
   }, [combinedFoods, recentFoods, normalizedFavorites, selectedCategoryFilter]);
 
   const indexedCombinedFoods = useMemo(() => (
-    searchLibrary.map((food, index) => ({
-      ...food,
-      searchIndexText: getFoodSearchText(food),
-      catalogOrder: index
-    }))
+    searchLibrary.map((food, index) => {
+      const typedFood = { ...food, productType: inferProductType(food) };
+      return {
+        ...typedFood,
+        searchIndexText: getFoodSearchText(typedFood),
+        catalogOrder: index
+      };
+    })
   ), [searchLibrary]);
 
   const normalizedSearchQuery = useMemo(() => normalizeSearchText(searchQuery), [searchQuery]);
@@ -2458,6 +2468,7 @@ export default function App() {
   const filteredSearchFoods = useMemo(() => indexedCombinedFoods.filter(food => {
     const matchesQuery = searchTokens.length === 0 || searchTokens.every(token => food.searchIndexText.includes(token));
     if (!matchesQuery) return false;
+    if (selectedProductType !== ALL_PRODUCT_TYPES && food.productType !== selectedProductType) return false;
 
     if (['Усі', 'Недавні', 'Обрані'].includes(selectedCategoryFilter)) return true;
     if (selectedCategoryFilter === 'Моя база') {
@@ -2519,19 +2530,27 @@ export default function App() {
     const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
     if (rankDiff !== 0) return rankDiff;
     return a.catalogOrder - b.catalogOrder;
-  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, favoriteNameSet, mealUsageStats, normalizedSearchQuery, foodSortOption]);
+  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, selectedProductType, favoriteNameSet, mealUsageStats, normalizedSearchQuery, foodSortOption]);
 
-  const filteredExternalSearchFoods = useMemo(() => externalSearchFoods.filter(food => {
+  const filteredExternalSearchFoods = useMemo(() => externalSearchFoods.map(food => ({
+    ...food,
+    productType: inferProductType(food)
+  })).filter(food => {
+    if (selectedProductType !== ALL_PRODUCT_TYPES && food.productType !== selectedProductType) return false;
     if (selectedCategoryFilter === 'Усі') return true;
     if (selectedCategoryFilter === 'Супермаркети') return true;
     return false;
-  }), [externalSearchFoods, selectedCategoryFilter]);
+  }), [externalSearchFoods, selectedCategoryFilter, selectedProductType]);
 
-  const filteredAiSearchFoods = useMemo(() => aiSearchFoods.filter(food => {
+  const filteredAiSearchFoods = useMemo(() => aiSearchFoods.map(food => ({
+    ...food,
+    productType: inferProductType(food)
+  })).filter(food => {
+    if (selectedProductType !== ALL_PRODUCT_TYPES && food.productType !== selectedProductType) return false;
     if (selectedCategoryFilter === 'Усі') return true;
     if (selectedCategoryFilter === 'Супермаркети') return true;
     return false;
-  }), [aiSearchFoods, selectedCategoryFilter]);
+  }), [aiSearchFoods, selectedCategoryFilter, selectedProductType]);
 
   const searchSuggestions = useMemo(() => {
     if (searchTokens.length === 0 || !showSuggestions) return [];
@@ -4613,10 +4632,32 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* Сортування */}
-                <div className="search-sort-container" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px', marginBottom: '12px', fontSize: '12px', color: 'var(--text-dark-muted)' }}>
-                  <span>Сортувати за:</span>
+                {/* Категорія товару та сортування */}
+                <div className="search-sort-container" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px 12px', padding: '0 4px', marginBottom: '12px', fontSize: '12px', color: 'var(--text-dark-muted)' }}>
+                  <label htmlFor="product-type-filter">Категорія:</label>
+                  <select
+                    id="product-type-filter"
+                    value={selectedProductType}
+                    onChange={(event) => setSelectedProductType(event.target.value)}
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      borderRadius: '6px',
+                      color: 'var(--text-dark)',
+                      padding: '4px 8px',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                  >
+                    <option value={ALL_PRODUCT_TYPES}>{ALL_PRODUCT_TYPES}</option>
+                    {PRODUCT_TYPES.map(productType => (
+                      <option key={productType} value={productType}>{productType}</option>
+                    ))}
+                  </select>
+                  <label htmlFor="food-sort-option">Сортувати за:</label>
                   <select 
+                    id="food-sort-option"
                     value={foodSortOption} 
                     onChange={(e) => setFoodSortOption(e.target.value)}
                     style={{
@@ -4707,7 +4748,7 @@ export default function App() {
                                 {food.name}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {shouldShowBrandPrefix(food, !!food.supermarket) ? `${food.brand} • ` : ''}{getFoodNutritionLabel(food)}
+                                {food.productType} • {shouldShowBrandPrefix(food, !!food.supermarket) ? `${food.brand} • ` : ''}{getFoodNutritionLabel(food)}
                               </span>
                             </div>
                             <div className="search-food-actions">
