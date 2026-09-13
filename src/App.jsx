@@ -79,6 +79,11 @@ import {
   scaleNutritionPer100g
 } from './services/nutrition';
 import {
+  findReliableFoodMatchByName,
+  getFoodSearchText,
+  getProductQueryMatchScore
+} from './utils/productSearch';
+import {
   createAiConfirmationDraft,
   scaleAiConfirmationDraftByWeight,
   validateAiConfirmationDraft
@@ -219,16 +224,6 @@ const getSupermarketClass = (supermarket) => {
   return 'supermarket-general';
 };
 
-const getFoodSearchText = (food) =>
-  normalizeSearchText([
-    food.name,
-    food.brand,
-    food.supermarket,
-    food.category,
-    ...(Array.isArray(food.aliases) ? food.aliases : [food.aliases]),
-    food.searchText
-  ].filter(Boolean).join(' '));
-
 const hasCompleteNutritionValues = (item) => (
   ["calories", "protein", "fat", "carbs"].every(field => Number.isFinite(Number(item?.[field])))
 );
@@ -321,37 +316,6 @@ const QuickPortionButtons = ({ baseWeight, name, currentWeight, preferredWeight,
       ))}
     </div>
   );
-};
-
-const findBestFoodMatchByName = (foodName, foods) => {
-  const query = normalizeSearchText(foodName);
-  const tokens = query.split(/\s+/).filter(token => token.length >= 2);
-  if (!query || tokens.length === 0) return null;
-
-  let bestMatch = null;
-  let bestScore = 0;
-
-  foods.forEach((food, index) => {
-    if (!hasCompleteNutritionValues(food)) return;
-
-    const name = normalizeSearchText(food.name);
-    const text = getFoodSearchText(food);
-    if (!tokens.every(token => text.includes(token))) return;
-
-    let score = 40;
-    if (name === query) score += 60;
-    else if (name.startsWith(query) || query.startsWith(name)) score += 35;
-    if (food.isCustom || food.isCustomBarcode || food.source === "manual" || food.dataQuality === "manual") score += 20;
-    if (food.source === "ua-core") score += 12;
-    score -= index * 0.01;
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = food;
-    }
-  });
-
-  return bestScore >= 45 ? bestMatch : null;
 };
 
 const calculateAutomaticNutritionTargets = profile => {
@@ -1286,7 +1250,7 @@ export default function App() {
           console.warn('Розширений каталог недоступний для локального зіставлення:', error);
         }
       }
-      const localNutritionMatch = findBestFoodMatchByName(result.name, [
+      const localNutritionMatch = findReliableFoodMatchByName(result.name, [
         ...Object.values(customBarcodes).map(food => ({ ...food, isCustomBarcode: true })),
         ...normalizedCustomFoods.map(food => ({ ...food, isCustom: true })),
         ...learnedProducts.map(food => ({ ...food, isLearned: true })),
@@ -2486,12 +2450,7 @@ export default function App() {
     if (usage > 0) score += Math.min(usage, 30) * 450;
     if (food.source === 'ua-core') score += 120;
     if (food.source === 'ua-seed') score += 60;
-
-    if (normalizedSearchQuery) {
-      if (normalizedName === normalizedSearchQuery) score += 900;
-      else if (normalizedName.startsWith(normalizedSearchQuery)) score += 500;
-      else if (normalizedName.includes(normalizedSearchQuery)) score += 220;
-    }
+    score += getProductQueryMatchScore(food, normalizedSearchQuery);
 
     return score;
   };
