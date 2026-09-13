@@ -22,6 +22,7 @@ export const getFoodSearchText = food => normalizeProductSearchText([
   food?.brand,
   food?.supermarket,
   food?.category,
+  food?.productType,
   food?.barcode,
   ...(Array.isArray(food?.aliases) ? food.aliases : [food?.aliases]),
   food?.searchText
