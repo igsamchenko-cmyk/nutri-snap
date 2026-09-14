@@ -3,6 +3,7 @@ import {
   buildProductCatalog,
   inferPreparationState,
   normalizeCatalogProduct,
+  normalizeProductAliases,
   validateCatalogProduct
 } from './catalogPipeline.js';
 
@@ -20,6 +21,11 @@ const makeProduct = overrides => ({
 });
 
 describe('catalog quality pipeline', () => {
+  it('treats missing alias collections as empty', () => {
+    expect(normalizeProductAliases(null)).toEqual([]);
+    expect(normalizeProductAliases(undefined)).toEqual([]);
+  });
+
   it('infers preparation states without treating cheese as raw food', () => {
     expect(inferPreparationState({ name: 'Куряче філе сире' })).toBe('raw');
     expect(inferPreparationState({ name: 'Сир кисломолочний 5%' })).toBe('unspecified');
@@ -31,6 +37,19 @@ describe('catalog quality pipeline', () => {
 
     expect(product.productType).toBe('Крупи та макарони');
     expect(product.searchText).toContain('крупи та макарони');
+  });
+
+  it('keeps taxonomy search words separate from product name aliases', () => {
+    const product = normalizeCatalogProduct(makeProduct({
+      name: 'Natural 2.5%',
+      aliases: [],
+      sourceCategories: ['en:dairies', 'en:yogurts']
+    }));
+
+    expect(product.productType).toBe('Молочне');
+    expect(product.aliases).toEqual([]);
+    expect(product.taxonomyAliases).toEqual(['молочне', 'йогурт']);
+    expect(product.searchText).toContain('йогурт');
   });
 
   it('rejects impossible nutrition values', () => {

@@ -22,4 +22,9 @@ const catalogBuild = buildProductCatalog(rawProductCatalog);
 export const productCatalog = catalogBuild.products;
 export const catalogDiagnostics = catalogBuild.diagnostics;
 export { normalizeProductSearchText } from './catalogPipeline.js';
-export { ALL_PRODUCT_TYPES, PRODUCT_TYPES, inferProductType } from './productType.js';
+export {
+  ALL_PRODUCT_TYPES,
+  PRODUCT_TYPES,
+  getProductTaxonomySearchAliases,
+  inferProductType
+} from './productType.js';

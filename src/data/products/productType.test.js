@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { inferProductType } from './productType.js';
+import {
+  getProductTaxonomySearchAliases,
+  inferProductType
+} from './productType.js';
 
 describe('product type inference', () => {
   it.each([
@@ -32,6 +35,42 @@ describe('product type inference', () => {
 
   it('keeps a valid manually assigned type', () => {
     expect(inferProductType({ name: 'Набір продуктів', productType: 'Снеки' })).toBe('Снеки');
+  });
+
+  it('uses official taxonomy tags when the product name is not descriptive', () => {
+    const product = {
+      name: 'Original 500',
+      sourceCategories: ['en:beverages', 'en:fruit-juices']
+    };
+
+    expect(inferProductType(product)).toBe('Напої');
+    expect(getProductTaxonomySearchAliases(product)).toEqual(['напої', 'сік']);
+  });
+
+  it.each([
+    ['Temna čokolada', 'Солодощі'],
+    ['Płatki owsiane', 'Крупи та макарони']
+  ])('normalizes European diacritics in %s', (name, expectedType) => {
+    expect(inferProductType({ name })).toBe(expectedType);
+  });
+
+  it('uses a Ukrainian source tag as a fallback for an unclear name', () => {
+    expect(inferProductType({
+      name: 'Original',
+      sourceCategories: ['uk:ковбаса']
+    })).toBe('М’ясо та птиця');
+  });
+
+  it('prefers a descriptive name over a broad source category', () => {
+    expect(inferProductType({
+      name: 'Riso parboiled',
+      sourceCategories: ['en:snacks', 'en:cereal-grains']
+    })).toBe('Крупи та макарони');
+  });
+
+  it('uses a known single-purpose brand only as a final fallback', () => {
+    expect(inferProductType({ name: 'Qualita Oro', brand: 'Lavazza' })).toBe('Напої');
+    expect(inferProductType({ name: 'Олія соняшникова', brand: 'Roshen' })).toBe('Олії та жири');
   });
 
   it('uses the fallback for an unknown product', () => {

@@ -8,7 +8,7 @@ import { openFoodFactsUkraineSnapshot as existingSnapshot } from '../src/data/pr
 const API_URL = 'https://search.openfoodfacts.org/search';
 const DEFAULT_OUTPUT = resolve('src/data/products/openFoodFactsUkraineSnapshot.js');
 const DEFAULT_META_OUTPUT = resolve('src/data/products/openFoodFactsUkraineSnapshotMeta.js');
-const DEFAULT_TARGET = 3000;
+const DEFAULT_TARGET = 4000;
 const DEFAULT_PAGE_SIZE = 500;
 const DEFAULT_DELAY_MS = 1500;
 const MAX_ATTEMPTS = 5;
@@ -18,11 +18,18 @@ const REQUEST_FIELDS = [
   'product_name',
   'product_name_uk',
   'product_name_ru',
+  'product_name_en',
+  'product_name_pl',
+  'product_name_ro',
   'generic_name',
   'generic_name_uk',
   'generic_name_ru',
+  'generic_name_en',
+  'generic_name_pl',
+  'generic_name_ro',
   'brands',
   'stores',
+  'categories_tags',
   'nutriments',
   'data_quality_errors_tags',
   'completeness',
@@ -63,9 +70,15 @@ export function normalizeOpenFoodFactsProduct(product = {}) {
     product.product_name_uk,
     product.product_name,
     product.product_name_ru,
+    product.product_name_en,
+    product.product_name_pl,
+    product.product_name_ro,
     product.generic_name,
     product.generic_name_uk,
-    product.generic_name_ru
+    product.generic_name_ru,
+    product.generic_name_en,
+    product.generic_name_pl,
+    product.generic_name_ro
   ]);
   const name = nameCandidates[0] || '';
   const nutriments = product.nutriments || {};
@@ -85,6 +98,9 @@ export function normalizeOpenFoodFactsProduct(product = {}) {
   if (energyKcal > 1000 || protein > 100 || fat > 100 || carbs > 100) return null;
   if (protein + fat + carbs > 105) return null;
   const aliases = nameCandidates.slice(1);
+  const sourceCategories = uniqueStrings(
+    Array.isArray(product.categories_tags) ? product.categories_tags : []
+  ).filter(category => /^[a-z]{2}:.+/i.test(category) && category.toLowerCase() !== 'en:null');
   const supermarket = String(product.stores || '').split(',')[0].trim();
 
   return {
@@ -101,6 +117,7 @@ export function normalizeOpenFoodFactsProduct(product = {}) {
     weight: 100,
     icon: '🛒',
     aliases,
+    sourceCategories,
     source: 'openfoodfacts',
     sourceLabel: 'Open Food Facts · Україна',
     sourceUrl: `https://world.openfoodfacts.org/product/${barcode}`,
@@ -122,6 +139,7 @@ function productToRow(product) {
     product.fat,
     product.carbs,
     product.aliases,
+    Array.isArray(product.sourceCategories) ? product.sourceCategories : [],
     product.sourceUpdatedAt
   ];
 }
@@ -145,6 +163,7 @@ export const openFoodFactsUkraineSnapshot = rows.map(([
   fat,
   carbs,
   aliases,
+  sourceCategories,
   sourceUpdatedAt
 ]) => ({
   id: \`off-ua-\${barcode}\`,
@@ -160,6 +179,7 @@ export const openFoodFactsUkraineSnapshot = rows.map(([
   weight: 100,
   icon: '🛒',
   aliases,
+  sourceCategories,
   source: 'openfoodfacts',
   sourceLabel: 'Open Food Facts · Україна',
   sourceUrl: \`https://world.openfoodfacts.org/product/\${barcode}\`,
@@ -254,7 +274,7 @@ async function main() {
 
   console.log(`Starting with ${productsByBarcode.size} products from the current snapshot.`);
   for (const searchQuery of SEARCH_QUERIES) {
-    for (let page = 1; page <= options.maxPages && productsByBarcode.size < options.target; page += 1) {
+    for (let page = 1; page <= options.maxPages; page += 1) {
       if (requestCount > 0) await sleep(options.delayMs);
       requestCount += 1;
 
@@ -275,7 +295,6 @@ async function main() {
       await saveSnapshot(options, productsByBarcode);
       if (pageProducts.length < options.pageSize) break;
     }
-    if (productsByBarcode.size >= options.target) break;
   }
 
   const products = await saveSnapshot(options, productsByBarcode);
