@@ -53,6 +53,20 @@ describe('product search quality', () => {
     expect(findReliableFoodMatchByName('Молоко', [branded])).toBeNull();
   });
 
+  it('uses generated USDA aliases for search without treating them as an exact nutrition match', () => {
+    const usdaFood = {
+      ...food,
+      name: 'Chicken breast, cooked',
+      aliases: [],
+      searchAliases: ['курка', 'куряча грудка'],
+      barcode: ''
+    };
+
+    expect(getFoodSearchText(usdaFood)).toContain('куряча грудка');
+    expect(getProductQueryMatchScore(usdaFood, 'куряча грудка')).toBeGreaterThan(15000);
+    expect(findReliableFoodMatchByName('куряча грудка', [usdaFood])).toBeNull();
+  });
+
   it('prefers an exact personal correction over a catalogue value', () => {
     const catalogue = { ...food, name: 'Сир кисломолочний' };
     const personal = {

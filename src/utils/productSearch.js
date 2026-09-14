@@ -6,6 +6,13 @@ const getAliases = food => (
     : String(food?.aliases || '').split(';')
 ).map(normalizeProductSearchText).filter(Boolean);
 
+const getSearchAliases = food => [
+  ...getAliases(food),
+  ...(Array.isArray(food?.searchAliases) ? food.searchAliases : [food?.searchAliases])
+    .map(normalizeProductSearchText)
+    .filter(Boolean)
+];
+
 const getTokens = value => normalizeProductSearchText(value).split(/\s+/).filter(Boolean);
 const hasCyrillic = value => /[а-яіїєґ]/i.test(value);
 const hasUkrainianLetters = value => /[іїєґ]/i.test(value);
@@ -25,6 +32,7 @@ export const getFoodSearchText = food => normalizeProductSearchText([
   food?.productType,
   food?.barcode,
   ...(Array.isArray(food?.aliases) ? food.aliases : [food?.aliases]),
+  ...(Array.isArray(food?.searchAliases) ? food.searchAliases : [food?.searchAliases]),
   ...(Array.isArray(food?.taxonomyAliases) ? food.taxonomyAliases : [food?.taxonomyAliases]),
   food?.searchText
 ].filter(Boolean).join(' '));
@@ -36,7 +44,7 @@ export function getProductQueryMatchScore(food, query) {
   const name = normalizeProductSearchText(food?.name);
   const brand = normalizeProductSearchText(food?.brand);
   const barcode = String(food?.barcode || '').trim();
-  const aliases = getAliases(food);
+  const aliases = getSearchAliases(food);
   const queryTokens = getTokens(normalizedQuery);
   const nameTokens = getTokens(name);
   let score = 0;

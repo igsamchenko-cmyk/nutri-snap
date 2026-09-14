@@ -4,6 +4,7 @@ import { getCatalogIdentity } from './catalogPipeline.js';
 import {
   loadExtendedProductCatalog,
   OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META,
+  USDA_FOOD_DATA_SNAPSHOT_META,
 } from './extendedCatalog.js';
 
 describe('local product catalogue metadata', () => {
@@ -65,12 +66,25 @@ describe('local product catalogue metadata', () => {
     expect(sugar).toMatchObject({ calories: 400, carbs: 100, weight: 5, nutritionBasis: '100g' });
   });
 
-  it('loads a dated Ukrainian Open Food Facts snapshot with unique barcodes', async () => {
+  it('loads dated OFF and USDA snapshots with verifiable source records', async () => {
     const { products } = await loadExtendedProductCatalog();
+    const offProducts = products.filter(product => product.source === 'openfoodfacts');
+    const usdaProducts = products.filter(product => product.source.startsWith('usda-'));
 
     expect(OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.count).toBe(products.length);
-    expect(products.length).toBeGreaterThanOrEqual(2500);
-    expect(new Set(products.map(product => product.barcode)).size).toBe(products.length);
+    expect(USDA_FOOD_DATA_SNAPSHOT_META.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.count).toBe(offProducts.length);
+    expect(USDA_FOOD_DATA_SNAPSHOT_META.count).toBe(usdaProducts.length);
+    expect(new Set(offProducts.map(product => product.barcode)).size).toBe(offProducts.length);
+    expect(usdaProducts.every(product => product.sourceUrl?.includes('/food-details/'))).toBe(true);
+    expect(usdaProducts.every(product => (
+      product.nutritionBasis === '100g'
+      && product.per100g?.calories === product.calories
+      && product.per100g?.protein === product.protein
+      && product.per100g?.fat === product.fat
+      && product.per100g?.carbs === product.carbs
+    ))).toBe(true);
+    expect(usdaProducts.some(product => product.searchAliases.includes('курка'))).toBe(true);
+    expect(products.length).toBeGreaterThanOrEqual(15000);
   });
 });

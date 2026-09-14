@@ -56,13 +56,14 @@ describe('NutriSnap service worker', () => {
     handlers.get('install')({ waitUntil: promise => { installPromise = promise; } });
     await installPromise;
 
-    const appCache = stores.get('nutrisnap-cache-v76');
+    const appCache = stores.get('nutrisnap-cache-v77');
     expect(appCache.has('https://example.com/nutri-snap/assets/index-abc.js')).toBe(true);
   });
 
   it('deletes only old NutriSnap caches during activation', async () => {
     stores.set('nutrisnap-cache-v75', new Map());
     stores.set('nutrisnap-cache-v76', new Map());
+    stores.set('nutrisnap-cache-v77', new Map());
     stores.set('another-app-cache', new Map());
 
     let activatePromise;
@@ -70,12 +71,13 @@ describe('NutriSnap service worker', () => {
     await activatePromise;
 
     expect(stores.has('nutrisnap-cache-v75')).toBe(false);
-    expect(stores.has('nutrisnap-cache-v76')).toBe(true);
+    expect(stores.has('nutrisnap-cache-v76')).toBe(false);
+    expect(stores.has('nutrisnap-cache-v77')).toBe(true);
     expect(stores.has('another-app-cache')).toBe(true);
   });
 
   it('uses the cached shell when navigation returns a server error', async () => {
-    const cache = await cacheStorage.open('nutrisnap-cache-v76');
+    const cache = await cacheStorage.open('nutrisnap-cache-v77');
     await cache.put(
       'https://example.com/nutri-snap/index.html',
       new Response('offline shell', { status: 200 })
