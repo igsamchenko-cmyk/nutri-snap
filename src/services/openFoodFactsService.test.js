@@ -28,6 +28,8 @@ describe('Open Food Facts normalization', () => {
         product: {
           code: '4820000000000',
           product_name_uk: 'Тестовий йогурт',
+          product_name_en: 'Test yogurt',
+          categories_tags: ['en:dairies', 'en:yogurts', 'null'],
           brands: 'Тест',
           quantity: '500 g',
           nutriments: {
@@ -47,6 +49,10 @@ describe('Open Food Facts normalization', () => {
       packageWeight: 500,
       nutritionBasis: '100g',
       per100g: { calories: 100, protein: 5, fat: 2, carbs: 15 },
+      aliases: ['Test yogurt'],
+      productType: 'Молочне',
+      taxonomyAliases: ['молочне', 'йогурт'],
+      sourceCategories: ['en:dairies', 'en:yogurts'],
       sourceUrl: 'https://world.openfoodfacts.org/product/4820000000000',
       warning: expect.stringContaining('Open Food Facts')
     });

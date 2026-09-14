@@ -10,6 +10,9 @@ const product = {
   product_name: 'Вівсяні пластівці',
   product_name_uk: 'Вівсянка',
   product_name_ru: 'Овсянка',
+  product_name_en: 'Oat flakes',
+  product_name_pl: 'Płatki owsiane',
+  categories_tags: ['en:plant-based-foods', 'en:cereals-and-their-products', 'en:oat-flakes', 'null', null],
   brands: 'Приклад, Example',
   stores: 'Сільпо, Novus',
   completeness: 0.8,
@@ -31,7 +34,8 @@ describe('Open Food Facts Ukraine snapshot generator', () => {
       brand: 'Приклад',
       supermarket: 'Сільпо',
       calories: 370,
-      aliases: ['Вівсяні пластівці', 'Овсянка'],
+      aliases: ['Вівсяні пластівці', 'Овсянка', 'Oat flakes', 'Płatki owsiane'],
+      sourceCategories: ['en:plant-based-foods', 'en:cereals-and-their-products', 'en:oat-flakes'],
       source: 'openfoodfacts'
     });
   });

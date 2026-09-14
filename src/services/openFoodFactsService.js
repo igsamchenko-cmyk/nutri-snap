@@ -1,4 +1,8 @@
 import { fetchWithAbortTimeout } from "../utils/requestTimeout.js";
+import {
+  getProductTaxonomySearchAliases,
+  inferProductType
+} from "../data/products/productType.js";
 
 const API_BASE = "https://world.openfoodfacts.org";
 const APP_PARAMS = "app_name=NutriSnap&app_version=1.6.0";
@@ -15,9 +19,19 @@ const PRODUCT_FIELDS = [
   "product_name",
   "product_name_en",
   "product_name_uk",
+  "product_name_ru",
+  "product_name_pl",
+  "product_name_ro",
+  "generic_name",
+  "generic_name_en",
+  "generic_name_uk",
+  "generic_name_ru",
+  "generic_name_pl",
+  "generic_name_ro",
   "brands",
   "brands_tags",
   "categories",
+  "categories_tags",
   "countries",
   "countries_tags",
   "stores",
@@ -70,6 +84,18 @@ function normalizeText(text) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
+}
+
+function uniqueStrings(values) {
+  const unique = new Map();
+  values
+    .map(cleanText)
+    .filter(Boolean)
+    .forEach(value => {
+      const key = normalizeText(value);
+      if (key && !unique.has(key)) unique.set(key, value);
+    });
+  return [...unique.values()];
 }
 
 function toNumber(value) {
@@ -155,18 +181,64 @@ function getNutritionPer100g(product) {
   );
 }
 
-function getProductName(product) {
-  return cleanText(product.product_name_uk || product.product_name || product.product_name_en);
+function getProductNameCandidates(product) {
+  return uniqueStrings([
+    product.product_name_uk,
+    product.product_name,
+    product.product_name_ru,
+    product.product_name_en,
+    product.product_name_pl,
+    product.product_name_ro,
+    product.generic_name_uk,
+    product.generic_name,
+    product.generic_name_ru,
+    product.generic_name_en,
+    product.generic_name_pl,
+    product.generic_name_ro
+  ]);
 }
 
 function getPrimaryBrand(product) {
   return cleanText(product.brands?.split(",")[0] || "");
 }
 
+function enrichProductClassification(product) {
+  if (!product) return product;
+  const sourceCategories = uniqueStrings(
+    Array.isArray(product.sourceCategories) ? product.sourceCategories : []
+  ).filter(category => /^[a-z]{2}:.+/i.test(category) && category.toLowerCase() !== "en:null");
+  const taxonomyAliases = uniqueStrings([
+    ...(Array.isArray(product.taxonomyAliases) ? product.taxonomyAliases : []),
+    ...getProductTaxonomySearchAliases({ sourceCategories })
+  ]);
+  const productType = inferProductType({ ...product, productType: undefined, sourceCategories });
+
+  return {
+    ...product,
+    sourceCategories,
+    taxonomyAliases,
+    productType,
+    searchText: normalizeText([
+      product.searchText,
+      product.name,
+      product.brand,
+      product.barcode,
+      productType,
+      ...taxonomyAliases
+    ].filter(Boolean).join(" "))
+  };
+}
+
 function normalizeProduct(product) {
-  const name = getProductName(product);
+  const nameCandidates = getProductNameCandidates(product);
+  const name = nameCandidates[0];
   if (!name) return null;
 
+  const aliases = nameCandidates.slice(1);
+  const sourceCategories = uniqueStrings(
+    Array.isArray(product.categories_tags) ? product.categories_tags : []
+  ).filter(category => /^[a-z]{2}:.+/i.test(category) && category.toLowerCase() !== "en:null");
+  const taxonomyAliases = getProductTaxonomySearchAliases({ sourceCategories });
   const brand = getPrimaryBrand(product);
   const nutrition = getNutritionPer100g(product);
   if (!nutrition) return null;
@@ -184,7 +256,7 @@ function normalizeProduct(product) {
   const ingredients = product.ingredients_text_uk || product.ingredients_text || product.ingredients_text_en || null;
   const cacheId = barcode ? `off-${barcode}` : `off-${normalizeText(fullName).slice(0, 80)}`;
 
-  return {
+  return enrichProductClassification({
     id: cacheId,
     barcode,
     name: fullName,
@@ -201,6 +273,9 @@ function normalizeProduct(product) {
     defaultPortionGrams,
     weight: defaultPortionGrams,
     icon: supermarket ? "🛒" : "🥗",
+    aliases,
+    sourceCategories,
+    taxonomyAliases,
     image: product.image_front_url || product.image_url || null,
     ingredients: ingredients ? cleanText(ingredients) : null,
     source: "openfoodfacts",
@@ -216,9 +291,11 @@ function normalizeProduct(product) {
       supermarket,
       product.stores,
       product.categories,
+      ...aliases,
+      ...taxonomyAliases,
       barcode
     ].filter(Boolean).join(" "))
-  };
+  });
 }
 
 function openCacheDb() {
@@ -301,6 +378,7 @@ async function searchCachedProducts(query) {
 
   return products
     .filter(product => now - (product.cachedAt || 0) < CACHE_TTL_MS)
+    .map(enrichProductClassification)
     .filter(product => tokens.every(token => (product.searchText || normalizeText(product.name)).includes(token)))
     .sort((a, b) => {
       const aMarket = a.supermarket ? 1 : 0;
@@ -345,7 +423,7 @@ async function getCachedProductByBarcode(barcode) {
     });
   });
 
-  return products[0] || null;
+  return enrichProductClassification(products[0] || null);
 }
 
 function dedupeProducts(products) {

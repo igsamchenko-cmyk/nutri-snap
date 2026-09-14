@@ -1,4 +1,4 @@
-import { inferProductType } from './productType.js';
+import { getProductTaxonomySearchAliases, inferProductType } from './productType.js';
 
 const REQUIRED_NUTRITION_FIELDS = ['calories', 'protein', 'fat', 'carbs'];
 
@@ -43,7 +43,9 @@ export function normalizeProductSearchText(value = '') {
 }
 
 export function normalizeProductAliases(value = []) {
-  const aliases = Array.isArray(value)
+  const aliases = value === null || value === undefined
+    ? []
+    : Array.isArray(value)
     ? value
     : String(value).split(/[;|]/);
   const uniqueAliases = new Map();
@@ -97,6 +99,7 @@ function buildSearchText(product) {
     product.category,
     product.productType,
     ...product.aliases,
+    ...product.taxonomyAliases,
     ...stateAliases,
     product.searchText
   ].filter(Boolean).join(' '));
@@ -122,8 +125,13 @@ function getCatalogNameIdentity(product = {}) {
 
 export function normalizeCatalogProduct(product = {}, index = 0) {
   const aliases = normalizeProductAliases(product.aliases);
+  const sourceCategories = normalizeProductAliases(product.sourceCategories);
+  const taxonomyAliases = normalizeProductAliases([
+    ...(Array.isArray(product.taxonomyAliases) ? product.taxonomyAliases : [product.taxonomyAliases]),
+    ...getProductTaxonomySearchAliases({ ...product, sourceCategories })
+  ]);
   const preparationState = inferPreparationState({ ...product, aliases });
-  const productType = inferProductType({ ...product, aliases });
+  const productType = inferProductType({ ...product, aliases, sourceCategories });
   const per100g = Object.fromEntries(
     REQUIRED_NUTRITION_FIELDS.map(field => [field, getNutrition(product, field)])
   );
@@ -137,6 +145,8 @@ export function normalizeCatalogProduct(product = {}, index = 0) {
     category: String(product.category || 'Інше').trim(),
     productType,
     aliases,
+    sourceCategories,
+    taxonomyAliases,
     preparationState,
     nutritionBasis: '100g',
     per100g,
