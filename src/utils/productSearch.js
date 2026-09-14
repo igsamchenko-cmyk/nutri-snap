@@ -26,6 +26,7 @@ const isPersonalProduct = food => Boolean(
 
 export const getFoodSearchText = food => normalizeProductSearchText([
   food?.name,
+  food?.displayName,
   food?.brand,
   food?.supermarket,
   food?.category,
@@ -42,9 +43,11 @@ export function getProductQueryMatchScore(food, query) {
   if (!normalizedQuery) return 0;
 
   const name = normalizeProductSearchText(food?.name);
+  const displayName = normalizeProductSearchText(food?.displayName);
   const brand = normalizeProductSearchText(food?.brand);
   const barcode = String(food?.barcode || '').trim();
   const aliases = getSearchAliases(food);
+  const aliasText = aliases.join(' ');
   const queryTokens = getTokens(normalizedQuery);
   const nameTokens = getTokens(name);
   let score = 0;
@@ -54,9 +57,14 @@ export function getProductQueryMatchScore(food, query) {
   else if (name.startsWith(normalizedQuery)) score += 12000;
   else if (queryTokens.every(token => name.includes(token))) score += 8000;
 
+  if (displayName === normalizedQuery) score += 19000;
+  else if (displayName.startsWith(normalizedQuery)) score += 11000;
+  else if (displayName && queryTokens.every(token => displayName.includes(token))) score += 7500;
+
   if (aliases.includes(normalizedQuery)) score += 18000;
   else if (aliases.some(alias => alias.startsWith(normalizedQuery))) score += 10000;
   else if (aliases.some(alias => queryTokens.every(token => alias.includes(token)))) score += 7000;
+  else if (queryTokens.every(token => aliasText.includes(token))) score += 6000;
 
   if (brand === normalizedQuery) score += 6000;
   else if (brand.startsWith(normalizedQuery)) score += 3500;

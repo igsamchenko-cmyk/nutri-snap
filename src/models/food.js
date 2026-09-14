@@ -109,7 +109,16 @@ function normalizeSource(value, input = {}) {
   if (['ai', 'ai_photo', 'ai_photo_local_match'].includes(normalized)) return 'ai_photo';
   if (['ai_search', 'ai_estimate'].includes(normalized)) return 'ai_estimate';
   if (['barcode', 'barcode_off', 'openfoodfacts', 'open_food_facts', 'off'].includes(normalized)) return 'barcode_off';
-  if (['database', 'database_match', 'local', 'local_db', 'ua_core'].includes(normalized)) return 'local_db';
+  if ([
+    'database',
+    'database_match',
+    'local',
+    'local_db',
+    'ua_core',
+    'usda_foundation',
+    'usda_fndds',
+    'usda_sr_legacy'
+  ].includes(normalized)) return 'local_db';
   if (['manual'].includes(normalized) || input.dataQuality === 'manual') return 'manual';
   if (['custom'].includes(normalized)) return 'custom';
 

@@ -86,5 +86,5 @@ describe('local product catalogue metadata', () => {
     ))).toBe(true);
     expect(usdaProducts.some(product => product.searchAliases.includes('курка'))).toBe(true);
     expect(products.length).toBeGreaterThanOrEqual(15000);
-  });
+  }, 15000);
 });

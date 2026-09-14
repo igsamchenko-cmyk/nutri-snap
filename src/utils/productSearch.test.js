@@ -57,13 +57,15 @@ describe('product search quality', () => {
     const usdaFood = {
       ...food,
       name: 'Chicken breast, cooked',
+      displayName: 'Куряча грудка, приготована',
       aliases: [],
-      searchAliases: ['курка', 'куряча грудка'],
+      searchAliases: ['курка', 'грудка', 'приготована'],
       barcode: ''
     };
 
     expect(getFoodSearchText(usdaFood)).toContain('куряча грудка');
-    expect(getProductQueryMatchScore(usdaFood, 'куряча грудка')).toBeGreaterThan(15000);
+    expect(getProductQueryMatchScore(usdaFood, 'куряча грудка')).toBeGreaterThan(10000);
+    expect(getProductQueryMatchScore(usdaFood, 'курка приготована')).toBeGreaterThan(5000);
     expect(findReliableFoodMatchByName('куряча грудка', [usdaFood])).toBeNull();
   });
 

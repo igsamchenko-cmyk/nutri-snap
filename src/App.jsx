@@ -243,6 +243,8 @@ const getFoodNutritionLabel = (food) => {
   return `${Number(food?.calories) || 0} ккал / ${Number(food?.weight) || 100} г`;
 };
 
+const getFoodDisplayName = (food) => food?.displayName || food?.name || '';
+
 const parseNutritionInput = (value) => Number(String(value ?? '').trim().replace(',', '.'));
 
 const hasFilledNutritionInputs = (calories, protein, fat, carbs, weight) => {
@@ -891,8 +893,11 @@ export default function App() {
   };
 
   const selectSearchFood = (food) => {
-    setSelectedSearchFood(food);
-    setSearchFoodWeight(getPreferredFoodWeight(food, food?.weight));
+    const selectedFood = food.displayName
+      ? { ...food, sourceName: food.sourceName || food.name, name: food.displayName }
+      : food;
+    setSelectedSearchFood(selectedFood);
+    setSearchFoodWeight(getPreferredFoodWeight(selectedFood, selectedFood?.weight));
   };
 
   const ensureExtendedProductCatalog = async () => {
@@ -2465,6 +2470,7 @@ export default function App() {
     if (usage > 0) score += Math.min(usage, 30) * 450;
     if (food.source === 'ua-core') score += 120;
     if (food.source === 'ua-seed') score += 60;
+    score += Number(food.searchPriority) || 0;
     score += getProductQueryMatchScore(food, normalizedSearchQuery);
 
     return score;
@@ -4517,10 +4523,10 @@ export default function App() {
                                 fontWeight: 600, 
                                 color: theme === 'light' ? 'var(--text-light-primary)' : 'var(--text-dark-primary)' 
                               }}>
-                                {food.name}
+                                {getFoodDisplayName(food)}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {shouldShowBrandPrefix(food, false) ? `${food.brand} • ` : ''}{getFoodNutritionLabel(food)}
+                                {food.displayName ? `${food.name} • ` : ''}{shouldShowBrandPrefix(food, false) ? `${food.brand} • ` : ''}{getFoodNutritionLabel(food)}
                               </span>
                             </div>
                           </div>
@@ -4751,10 +4757,10 @@ export default function App() {
                                   cursor: food.isCustom || food.isCustomBarcode ? 'pointer' : 'default'
                                 }}
                               >
-                                {food.name}
+                                {getFoodDisplayName(food)}
                               </span>
                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {food.productType} • {shouldShowBrandPrefix(food, !!food.supermarket) ? `${food.brand} • ` : ''}{getFoodNutritionLabel(food)}
+                                {food.displayName ? `${food.name} • ` : ''}{food.productType} • {shouldShowBrandPrefix(food, !!food.supermarket) ? `${food.brand} • ` : ''}{getFoodNutritionLabel(food)}
                               </span>
                             </div>
                             <div className="search-food-actions">
