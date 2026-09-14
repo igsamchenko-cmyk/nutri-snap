@@ -722,6 +722,20 @@ describe('Food and Meal Models', () => {
     expect(input.per100g.calories).toBe('52');
   });
 
+  it('should keep USDA catalogue foods as verified local database entries', () => {
+    const food = normalizeFoodItem({
+      id: 'usda-123',
+      name: 'Куряча грудка',
+      source: 'usda-fndds',
+      dataQuality: 'database',
+      per100g: { calories: 165, protein: 31, fat: 3.6, carbs: 0 }
+    });
+
+    expect(food.source).toBe('local_db');
+    expect(food.dataQuality).toBe('database');
+    expect(food.per100g).toEqual({ calories: 165, protein: 31, fat: 3.6, carbs: 0 });
+  });
+
   it('should normalize an existing MealEntry with totals and preserve compatibility aliases', () => {
     const meal = normalizeMealEntry({
       id: 'meal-2',
