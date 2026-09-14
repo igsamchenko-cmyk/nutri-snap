@@ -127,8 +127,11 @@ export default defineConfig(({ mode }) => {
             if (id.includes('node_modules/lucide-react')) {
               return 'vendor-icons';
             }
-            // Великий знімок Open Food Facts лишається окремим відкладеним chunk.
-            if (id.includes('/src/data/products/openFoodFactsUkraineSnapshot.js')) {
+            // Великі знімки OFF і USDA лишаються окремими відкладеними chunk.
+            if (
+              id.includes('/src/data/products/openFoodFactsUkraineSnapshot.js')
+              || id.includes('/src/data/products/usdaFoodDataSnapshot.js')
+            ) {
               return;
             }
             // Основна база продуктів → окремий chunk, рідко змінюється

@@ -8,11 +8,21 @@ NutriSnap searches packaged foods through Open Food Facts and stores selected re
 
 The repository also contains a compact Ukrainian Open Food Facts snapshot for local name and barcode search. It includes only records with a valid barcode, a product name, complete plausible per-100 g nutrition, and no Open Food Facts quality errors. The default refresh combines products tagged as sold in Ukraine with GS1 Ukraine barcode prefix 482, deduplicates them by barcode, and keeps up to 4,000 valid products when the source has enough complete records. It retains official taxonomy categories plus Ukrainian, Russian, English, Polish, and Romanian name variants when available. The importer uses the official Search-a-licious API with pages of up to 500 results, identifies itself with a User-Agent, throttles requests, refreshes every configured page, and saves a checkpoint after every page.
 
-The large snapshot is emitted as a separate lazy-loaded application chunk. The dashboard starts with the smaller curated catalogue; the extended snapshot loads when the user opens the scanner or product search, then participates in local name matching and barcode lookup before any network fallback.
+The app also ships a compact snapshot of generic foods and prepared dishes from [USDA FoodData Central](https://fdc.nal.usda.gov/). USDA data are public domain under [CC0 1.0](https://fdc.nal.usda.gov/data-documentation/), so using the local catalogue needs no API key and creates no per-search cost. The importer combines Foundation Foods, FNDDS 2021-2023, and SR Legacy, keeps only complete plausible per-100 g calories and macros, merges duplicate descriptions, and adds controlled Ukrainian search aliases for common foods and preparation states. Source descriptions remain in English to avoid presenting machine-generated translations as official names.
+
+The large OFF and USDA snapshots are emitted as separate lazy-loaded application chunks. The dashboard starts with the smaller curated catalogue; the extended snapshots load when the user opens the scanner or product search, then participate in local name matching and barcode lookup before any network fallback. Once requested, the service worker caches them for later offline use.
 
 ```bash
 npm run update:off-ukraine
 ```
+
+Refresh the USDA snapshot directly from the official downloadable datasets:
+
+~~~bash
+npm run update:usda
+~~~
+
+The USDA refresh temporarily needs up to 2 GB of Node.js heap while it extracts and validates the source archives. The generated application snapshot is compact and is the only USDA data file committed to the app.
 
 The built-in catalogue passes through one quality pipeline before it reaches search. The pipeline normalizes names and aliases, identifies raw, dry, cooked, prepared, and frozen foods, removes duplicate name-brand-state or barcode entries, and rejects impossible per-100g nutrition values. Default portion weight remains separate from nutrition values per 100 g.
 

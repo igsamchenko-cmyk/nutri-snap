@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'nutrisnap-cache-';
-const CACHE_NAME = CACHE_PREFIX + 'v76';
+const CACHE_NAME = CACHE_PREFIX + 'v77';
 const BASE_PATH = '/nutri-snap';
 const BASE_URL = BASE_PATH + '/';
 const APP_SHELL_URL = BASE_URL + 'index.html';

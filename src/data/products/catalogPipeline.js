@@ -5,6 +5,9 @@ const REQUIRED_NUTRITION_FIELDS = ['calories', 'protein', 'fat', 'carbs'];
 const SOURCE_PRIORITY = {
   'ua-import': 100,
   openfoodfacts: 95,
+  'usda-foundation': 88,
+  'usda-fndds': 87,
+  'usda-sr-legacy': 86,
   'ua-core': 90,
   'ua-retail': 80,
   'ua-atb': 75,
@@ -99,6 +102,7 @@ function buildSearchText(product) {
     product.category,
     product.productType,
     ...product.aliases,
+    ...product.searchAliases,
     ...product.taxonomyAliases,
     ...stateAliases,
     product.searchText
@@ -125,6 +129,7 @@ function getCatalogNameIdentity(product = {}) {
 
 export function normalizeCatalogProduct(product = {}, index = 0) {
   const aliases = normalizeProductAliases(product.aliases);
+  const searchAliases = normalizeProductAliases(product.searchAliases);
   const sourceCategories = normalizeProductAliases(product.sourceCategories);
   const taxonomyAliases = normalizeProductAliases([
     ...(Array.isArray(product.taxonomyAliases) ? product.taxonomyAliases : [product.taxonomyAliases]),
@@ -145,6 +150,7 @@ export function normalizeCatalogProduct(product = {}, index = 0) {
     category: String(product.category || 'Інше').trim(),
     productType,
     aliases,
+    searchAliases,
     sourceCategories,
     taxonomyAliases,
     preparationState,
@@ -205,9 +211,14 @@ function mergeDuplicateProducts(current, candidate) {
     ...duplicate.aliases,
     ...(preferred.name !== duplicate.name ? [duplicate.name] : [])
   ]);
+  const searchAliases = normalizeProductAliases([
+    ...preferred.searchAliases,
+    ...duplicate.searchAliases
+  ]);
   const merged = {
     ...preferred,
     aliases,
+    searchAliases,
     searchText: [preferred.searchText, duplicate.searchText].filter(Boolean).join(' ')
   };
 

@@ -1,7 +1,7 @@
 {
   "name": "nutri-snap",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "update:off-ukraine": "node scripts/openFoodFactsSnapshot.mjs",
+    "update:usda": "node --max-old-space-size=2048 scripts/usdaFoodDataSnapshot.mjs",
     "worker:login": "wrangler login",
     "worker:whoami": "wrangler whoami",
     "worker:dev": "wrangler dev",
@@ -36,6 +37,7 @@
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
+    "fflate": "^0.8.2",
     "globals": "^17.6.0",
     "jsdom": "^29.1.1",
     "vite": "^8.0.12",

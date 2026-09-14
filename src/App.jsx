@@ -57,7 +57,9 @@ import {
 } from './data/products';
 import {
   loadExtendedProductCatalog,
-  OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META
+  loadPackagedProductCatalog,
+  OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META,
+  USDA_FOOD_DATA_SNAPSHOT_META
 } from './data/products/extendedCatalog';
 import { GEMINI_MODEL_OPTIONS } from './constants';
 import {
@@ -911,9 +913,9 @@ export default function App() {
     }
   };
 
-  // Великий каталог не затримує запуск застосунку й підвантажується при відкритті сканера.
+  // Великий каталог не затримує запуск застосунку й підвантажується після початку пошуку.
   useEffect(() => {
-    if (activeTab !== 'scanner') return;
+    if (activeTab !== 'scanner' || scannerMode !== 'search' || searchQuery.trim().length < 2) return;
     if (extendedProductCatalogRef.current.length > 0) {
       setExtendedProductCatalog(extendedProductCatalogRef.current);
       setExtendedCatalogStatus('ready');
@@ -922,22 +924,25 @@ export default function App() {
 
     let cancelled = false;
     setExtendedCatalogStatus('loading');
-    loadExtendedProductCatalog()
-      .then(catalogBuild => {
-        extendedProductCatalogRef.current = catalogBuild.products;
-        if (cancelled) return;
-        setExtendedProductCatalog(catalogBuild.products);
-        setExtendedCatalogStatus('ready');
-      })
-      .catch(error => {
-        console.error('Не вдалося завантажити розширений каталог:', error);
-        if (!cancelled) setExtendedCatalogStatus('error');
-      });
+    const loadTimer = setTimeout(() => {
+      loadExtendedProductCatalog()
+        .then(catalogBuild => {
+          extendedProductCatalogRef.current = catalogBuild.products;
+          if (cancelled) return;
+          setExtendedProductCatalog(catalogBuild.products);
+          setExtendedCatalogStatus('ready');
+        })
+        .catch(error => {
+          console.error('Не вдалося завантажити розширений каталог:', error);
+          if (!cancelled) setExtendedCatalogStatus('error');
+        });
+    }, 750);
 
     return () => {
       cancelled = true;
+      clearTimeout(loadTimer);
     };
-  }, [activeTab]);
+  }, [activeTab, scannerMode, searchQuery]);
 
   // Захист від фантомних натискань (ghost click protection) при відкритті сканера або зміні режимів
   useEffect(() => {
@@ -1592,12 +1597,12 @@ export default function App() {
     const coreProduct = productCatalog.find(product => product.barcode === cleanBarcode);
     if (coreProduct) return coreProduct;
 
-    let extendedFoods = extendedProductCatalogRef.current;
+    let extendedFoods = extendedProductCatalogRef.current.filter(product => product.source === 'openfoodfacts');
     if (extendedFoods.length === 0) {
       try {
-        extendedFoods = await ensureExtendedProductCatalog();
+        extendedFoods = (await loadPackagedProductCatalog()).products;
       } catch (error) {
-        console.warn('Розширений каталог недоступний для пошуку штрих-коду:', error);
+        console.warn('Локальний каталог штрих-кодів недоступний:', error);
       }
     }
     const extendedProduct = extendedFoods.find(product => product.barcode === cleanBarcode);
@@ -2573,19 +2578,20 @@ export default function App() {
     }, {});
     if (extendedProductCatalog.length === 0) {
       sourceCounts['Open Food Facts · Україна'] = OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.count;
+      sourceCounts['USDA FoodData Central'] = USDA_FOOD_DATA_SNAPSHOT_META.count;
     }
 
     const verifiedCustomFoods = customFoods.filter(hasCompleteNutritionValues).length;
     const verifiedBarcodes = Object.values(customBarcodes).filter(hasCompleteNutritionValues).length;
 
     return {
-      catalog: OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.combinedCount,
+      catalog: USDA_FOOD_DATA_SNAPSHOT_META.combinedCount,
       demo: mockFoods.length,
       custom: customFoods.length,
       customBarcodes: Object.keys(customBarcodes).length,
       learned: learnedProducts.length,
       verifiedCustom: verifiedCustomFoods + verifiedBarcodes,
-      total: OPEN_FOOD_FACTS_UKRAINE_SNAPSHOT_META.combinedCount + mockFoods.length + customFoods.length + Object.keys(customBarcodes).length + learnedProducts.length,
+      total: USDA_FOOD_DATA_SNAPSHOT_META.combinedCount + mockFoods.length + customFoods.length + Object.keys(customBarcodes).length + learnedProducts.length,
       topSources: Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 4)
     };
   }, [customFoods, customBarcodes, learnedProducts, extendedProductCatalog]);
