@@ -59,6 +59,46 @@ describe('diary food entry', () => {
     });
   });
 
+  it('waits for a second character before searching the large catalogue', async () => {
+    const { container } = render(<App />);
+    fireEvent.click(container.querySelector('.scan-fab'));
+
+    fireEvent.change(screen.getByLabelText('Пошук продуктів'), {
+      target: { value: 'р' }
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('.search-food-item')).toHaveLength(0);
+      expect(screen.getByText('Введіть ще один символ для пошуку у великій базі.')).toBeTruthy();
+    });
+  });
+
+  it('does not render background catalogue rows while a custom name is edited', () => {
+    localStorage.setItem('nutrisnap_custom_foods', JSON.stringify([{
+      id: 'custom-mobile-edit',
+      name: 'Мій тестовий продукт',
+      weight: 100,
+      calories: 120,
+      protein: 10,
+      fat: 4,
+      carbs: 12,
+      per100g: { calories: 120, protein: 10, fat: 4, carbs: 12 }
+    }]));
+
+    const { container } = render(<App />);
+    fireEvent.click(container.querySelector('.scan-fab'));
+    expect(container.querySelectorAll('.search-food-item').length).toBeGreaterThan(0);
+
+    fireEvent.click(container.querySelector('.search-edit-btn'));
+    expect(container.querySelectorAll('.search-food-item')).toHaveLength(0);
+
+    const nameInput = screen.getByPlaceholderText('Наприклад: Вівсянка звичайна');
+    fireEvent.change(nameInput, { target: { value: 'Мій виправлений продукт' } });
+
+    expect(nameInput.value).toBe('Мій виправлений продукт');
+    expect(container.querySelectorAll('.search-food-item')).toHaveLength(0);
+  });
+
   it('uses complete nutrition returned by explicit Open Food Facts search', async () => {
     searchProductsByName.mockResolvedValue([{
       id: 'off-4820000000004',

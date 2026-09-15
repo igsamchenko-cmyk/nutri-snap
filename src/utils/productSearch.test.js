@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   findReliableFoodMatchByName,
   getFoodSearchText,
-  getProductQueryMatchScore
+  getProductQueryMatchScore,
+  rankFoodSearchResults
 } from './productSearch.js';
 
 const food = {
@@ -34,6 +35,21 @@ describe('product search quality', () => {
     expect(getProductQueryMatchScore(food, 'Молоко пастеризоване 2,5%'))
       .toBeGreaterThan(getProductQueryMatchScore(food, 'Приклад'));
     expect(getProductQueryMatchScore(food, 'Молоко 2.5%')).toBeGreaterThan(15000);
+  });
+
+  it('scores every matching product only once while ranking', () => {
+    const yoghurt = {
+      ...food,
+      id: 'yoghurt',
+      name: 'Йогурт з молоком',
+      barcode: '4820000000002'
+    };
+    const getAdditionalScore = vi.fn(product => product === yoghurt ? 50000 : 0);
+
+    const ranked = rankFoodSearchResults([food, yoghurt], 'молоко', getAdditionalScore);
+
+    expect(getAdditionalScore).toHaveBeenCalledTimes(2);
+    expect(ranked).toEqual([yoghurt, food]);
   });
 
   it('uses a unique exact name as a reliable nutrition match', () => {
