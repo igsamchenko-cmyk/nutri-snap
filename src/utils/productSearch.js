@@ -1,5 +1,7 @@
 import { normalizeProductSearchText } from '../data/products/catalogPipeline.js';
 
+const foodSearchIndexCache = new WeakMap();
+
 const getAliases = food => (
   Array.isArray(food?.aliases)
     ? food.aliases
@@ -24,32 +26,59 @@ const isPersonalProduct = food => Boolean(
   || food?.dataQuality === 'manual'
 );
 
-export const getFoodSearchText = food => normalizeProductSearchText([
-  food?.name,
-  food?.displayName,
-  food?.brand,
-  food?.supermarket,
-  food?.category,
-  food?.productType,
-  food?.barcode,
-  ...(Array.isArray(food?.aliases) ? food.aliases : [food?.aliases]),
-  ...(Array.isArray(food?.searchAliases) ? food.searchAliases : [food?.searchAliases]),
-  ...(Array.isArray(food?.taxonomyAliases) ? food.taxonomyAliases : [food?.taxonomyAliases]),
-  food?.searchText
-].filter(Boolean).join(' '));
-
-export function getProductQueryMatchScore(food, query) {
-  const normalizedQuery = normalizeProductSearchText(query);
-  if (!normalizedQuery) return 0;
+function getFoodSearchIndex(food) {
+  const canCache = food !== null && typeof food === 'object';
+  const cachedIndex = canCache ? foodSearchIndexCache.get(food) : null;
+  if (cachedIndex) return cachedIndex;
 
   const name = normalizeProductSearchText(food?.name);
   const displayName = normalizeProductSearchText(food?.displayName);
   const brand = normalizeProductSearchText(food?.brand);
   const barcode = String(food?.barcode || '').trim();
   const aliases = getSearchAliases(food);
-  const aliasText = aliases.join(' ');
+  const searchIndex = {
+    name,
+    displayName,
+    brand,
+    barcode,
+    aliases,
+    aliasText: aliases.join(' '),
+    nameTokens: getTokens(name),
+    text: normalizeProductSearchText([
+      food?.name,
+      food?.displayName,
+      food?.brand,
+      food?.supermarket,
+      food?.category,
+      food?.productType,
+      food?.barcode,
+      ...(Array.isArray(food?.aliases) ? food.aliases : [food?.aliases]),
+      ...(Array.isArray(food?.searchAliases) ? food.searchAliases : [food?.searchAliases]),
+      ...(Array.isArray(food?.taxonomyAliases) ? food.taxonomyAliases : [food?.taxonomyAliases]),
+      food?.searchText
+    ].filter(Boolean).join(' '))
+  };
+
+  if (canCache) foodSearchIndexCache.set(food, searchIndex);
+  return searchIndex;
+}
+
+export const getFoodSearchText = food => getFoodSearchIndex(food).text;
+
+export function getProductQueryMatchScore(food, query, queryIsNormalized = false) {
+  const normalizedQuery = queryIsNormalized ? query : normalizeProductSearchText(query);
+  if (!normalizedQuery) return 0;
+
+  const {
+    name,
+    displayName,
+    brand,
+    barcode,
+    aliases,
+    aliasText,
+    nameTokens
+  } = getFoodSearchIndex(food);
   const queryTokens = getTokens(normalizedQuery);
-  const nameTokens = getTokens(name);
   let score = 0;
 
   if (barcode && barcode === normalizedQuery.replace(/\s+/g, '')) score += 50000;
@@ -75,6 +104,26 @@ export function getProductQueryMatchScore(food, query) {
   if (barcode.startsWith('482')) score += 20;
 
   return score;
+}
+
+export function rankFoodSearchResults(
+  foods = [],
+  query = '',
+  getAdditionalScore = () => 0,
+  queryIsNormalized = false
+) {
+  const normalizedQuery = queryIsNormalized ? query : normalizeProductSearchText(query);
+  if (!normalizedQuery) return [...foods];
+
+  return foods
+    .map((food, index) => ({
+      food,
+      index,
+      score: (Number(getAdditionalScore(food)) || 0)
+        + getProductQueryMatchScore(food, normalizedQuery, true)
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(candidate => candidate.food);
 }
 
 const nutritionSignature = food => ['calories', 'protein', 'fat', 'carbs']

@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback, useDeferredValue } from 'react';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -89,7 +89,7 @@ import {
 import {
   findReliableFoodMatchByName,
   getFoodSearchText,
-  getProductQueryMatchScore
+  rankFoodSearchResults
 } from './utils/productSearch';
 import {
   createAiConfirmationDraft,
@@ -2442,15 +2442,17 @@ export default function App() {
   const indexedCombinedFoods = useMemo(() => (
     searchLibrary.map((food, index) => {
       const typedFood = { ...food, productType: inferProductType(food) };
-      return {
+      const indexedFood = {
         ...typedFood,
-        searchIndexText: getFoodSearchText(typedFood),
         catalogOrder: index
       };
+      indexedFood.searchIndexText = getFoodSearchText(indexedFood);
+      return indexedFood;
     })
   ), [searchLibrary]);
 
-  const normalizedSearchQuery = useMemo(() => normalizeSearchText(searchQuery), [searchQuery]);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const normalizedSearchQuery = useMemo(() => normalizeSearchText(deferredSearchQuery), [deferredSearchQuery]);
   const searchTokens = useMemo(() => normalizedSearchQuery.split(/\s+/).filter(Boolean), [normalizedSearchQuery]);
   const favoriteNameSet = useMemo(() => new Set(normalizedFavorites.map(fav => normalizeSearchText(fav.name))), [normalizedFavorites]);
   const mealUsageStats = useMemo(
@@ -2458,9 +2460,12 @@ export default function App() {
     [normalizedMeals]
   );
 
-  const getFoodUsageCount = (food) => mealUsageStats.get(normalizeSearchText(food.name))?.count || 0;
+  const getFoodUsageCount = useCallback(
+    food => mealUsageStats.get(normalizeSearchText(food.name))?.count || 0,
+    [mealUsageStats]
+  );
 
-  const getFoodSearchRank = (food) => {
+  const getFoodBaseSearchRank = useCallback((food) => {
     let score = 0;
     const usage = getFoodUsageCount(food);
     const normalizedName = normalizeSearchText(food.name);
@@ -2471,77 +2476,114 @@ export default function App() {
     if (food.source === 'ua-core') score += 120;
     if (food.source === 'ua-seed') score += 60;
     score += Number(food.searchPriority) || 0;
-    score += getProductQueryMatchScore(food, normalizedSearchQuery);
 
     return score;
-  };
+  }, [favoriteNameSet, getFoodUsageCount]);
 
-  const filteredSearchFoods = useMemo(() => indexedCombinedFoods.filter(food => {
-    const matchesQuery = searchTokens.length === 0 || searchTokens.every(token => food.searchIndexText.includes(token));
-    if (!matchesQuery) return false;
-    if (selectedProductType !== ALL_PRODUCT_TYPES && food.productType !== selectedProductType) return false;
+  const queryMatchedSearchFoods = useMemo(() => {
+    if (normalizedSearchQuery.length === 1) return [];
+    if (searchTokens.length === 0) return indexedCombinedFoods;
 
-    if (['Усі', 'Недавні', 'Обрані'].includes(selectedCategoryFilter)) return true;
-    if (selectedCategoryFilter === 'Моя база') {
-      return Boolean(food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual');
+    return indexedCombinedFoods.filter(food => (
+      searchTokens.every(token => food.searchIndexText.includes(token))
+    ));
+  }, [indexedCombinedFoods, normalizedSearchQuery, searchTokens]);
+
+  const rankedSearchFoods = useMemo(() => {
+    if (
+      searchTokens.length === 0
+      || selectedCategoryFilter === 'Недавні'
+      || foodSortOption !== 'rank'
+    ) {
+      return queryMatchedSearchFoods;
     }
-    if (selectedCategoryFilter === 'Часті') return getFoodUsageCount(food) > 0;
-    if (selectedCategoryFilter === 'Супермаркети') {
-      if (food.supermarket || food.source === 'ua-seed' || food.source === 'openfoodfacts') return true;
-      const isSupermarket = food.brand && (
-        food.brand.includes('АТБ') || 
-        food.brand.includes('Сільпо') || 
-        food.brand.includes('Своя Лінія') || 
-        food.brand.includes('Розумний Вибір') || 
-        food.brand.includes('Премія') ||
-        food.brand.includes('Повна Чаша') ||
-        food.brand.includes('Яготинське') ||
-        food.brand.includes('Галичина') ||
-        food.brand.includes('Комо') ||
-        food.brand.includes('Наша Ряба') ||
-        food.brand.includes('Пирятин') ||
-        food.brand.includes('Чумак') ||
-        food.brand.includes('Верес') ||
-        food.brand.includes('Рошен') ||
-        food.brand.includes('Світоч') ||
-        food.brand.includes('Agrola') ||
-        food.brand.includes('Кулиничі') ||
-        food.brand.includes('Київхліб') ||
-        food.brand.includes('Алан') ||
-        food.brand.includes('Ятрань') ||
-        food.brand.includes('Глобино')
-      );
-      return isSupermarket;
-    }
-    if (selectedCategoryFilter === 'Страви') {
-      return food.brand === 'Українська кухня' || food.brand === 'Популярне';
-    }
-    if (selectedCategoryFilter === 'Сніданок') return food.category === 'Сніданок';
-    if (selectedCategoryFilter === 'Обід') return food.category === 'Обід';
-    if (selectedCategoryFilter === 'Вечеря') return food.category === 'Вечеря';
-    if (selectedCategoryFilter === 'Перекуси') return food.category === 'Перекус' || food.category === 'Перший перекус' || food.category === 'Другий перекус';
-    if (selectedCategoryFilter === 'Обрані') {
-      return favoriteNameSet.has(normalizeSearchText(food.name));
-    }
-    return true;
-  }).sort((a, b) => {
+
+    return rankFoodSearchResults(
+      queryMatchedSearchFoods,
+      normalizedSearchQuery,
+      getFoodBaseSearchRank,
+      true
+    );
+  }, [
+    foodSortOption,
+    getFoodBaseSearchRank,
+    normalizedSearchQuery,
+    queryMatchedSearchFoods,
+    searchTokens.length,
+    selectedCategoryFilter
+  ]);
+
+  const filteredSearchFoods = useMemo(() => {
+    const filteredFoods = rankedSearchFoods.filter(food => {
+      if (selectedProductType !== ALL_PRODUCT_TYPES && food.productType !== selectedProductType) return false;
+
+      if (['Усі', 'Недавні', 'Обрані'].includes(selectedCategoryFilter)) return true;
+      if (selectedCategoryFilter === 'Моя база') {
+        return Boolean(food.isCustom || food.isCustomBarcode || food.source === 'manual' || food.dataQuality === 'manual');
+      }
+      if (selectedCategoryFilter === 'Часті') return getFoodUsageCount(food) > 0;
+      if (selectedCategoryFilter === 'Супермаркети') {
+        if (food.supermarket || food.source === 'ua-seed' || food.source === 'openfoodfacts') return true;
+        const isSupermarket = food.brand && (
+          food.brand.includes('АТБ') ||
+          food.brand.includes('Сільпо') ||
+          food.brand.includes('Своя Лінія') ||
+          food.brand.includes('Розумний Вибір') ||
+          food.brand.includes('Премія') ||
+          food.brand.includes('Повна Чаша') ||
+          food.brand.includes('Яготинське') ||
+          food.brand.includes('Галичина') ||
+          food.brand.includes('Комо') ||
+          food.brand.includes('Наша Ряба') ||
+          food.brand.includes('Пирятин') ||
+          food.brand.includes('Чумак') ||
+          food.brand.includes('Верес') ||
+          food.brand.includes('Рошен') ||
+          food.brand.includes('Світоч') ||
+          food.brand.includes('Agrola') ||
+          food.brand.includes('Кулиничі') ||
+          food.brand.includes('Київхліб') ||
+          food.brand.includes('Алан') ||
+          food.brand.includes('Ятрань') ||
+          food.brand.includes('Глобино')
+        );
+        return isSupermarket;
+      }
+      if (selectedCategoryFilter === 'Страви') {
+        return food.brand === 'Українська кухня' || food.brand === 'Популярне';
+      }
+      if (selectedCategoryFilter === 'Сніданок') return food.category === 'Сніданок';
+      if (selectedCategoryFilter === 'Обід') return food.category === 'Обід';
+      if (selectedCategoryFilter === 'Вечеря') return food.category === 'Вечеря';
+      if (selectedCategoryFilter === 'Перекуси') return food.category === 'Перекус' || food.category === 'Перший перекус' || food.category === 'Другий перекус';
+      if (selectedCategoryFilter === 'Обрані') {
+        return favoriteNameSet.has(normalizeSearchText(food.name));
+      }
+      return true;
+    });
+
     if (foodSortOption === 'caloriesAsc') {
-      return (a.calories || 0) - (b.calories || 0);
+      filteredFoods.sort((a, b) => (a.calories || 0) - (b.calories || 0));
+    } else if (foodSortOption === 'caloriesDesc') {
+      filteredFoods.sort((a, b) => (b.calories || 0) - (a.calories || 0));
+    } else if (foodSortOption === 'protein') {
+      filteredFoods.sort((a, b) => (b.protein || 0) - (a.protein || 0));
+    } else if (foodSortOption === 'name') {
+      filteredFoods.sort((a, b) => a.name.localeCompare(b.name, 'uk'));
+    } else if (selectedCategoryFilter === 'Недавні') {
+      filteredFoods.sort((a, b) => a.catalogOrder - b.catalogOrder);
+    } else if (selectedCategoryFilter === 'Часті') {
+      filteredFoods.sort((a, b) => getFoodUsageCount(b) - getFoodUsageCount(a));
     }
-    if (foodSortOption === 'caloriesDesc') {
-      return (b.calories || 0) - (a.calories || 0);
-    }
-    if (foodSortOption === 'protein') {
-      return (b.protein || 0) - (a.protein || 0);
-    }
-    if (foodSortOption === 'name') {
-      return a.name.localeCompare(b.name, 'uk');
-    }
-    if (selectedCategoryFilter === 'Недавні') return a.catalogOrder - b.catalogOrder;
-    const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
-    if (rankDiff !== 0) return rankDiff;
-    return a.catalogOrder - b.catalogOrder;
-  }).slice(0, MAX_LOCAL_SEARCH_RESULTS), [indexedCombinedFoods, searchTokens, selectedCategoryFilter, selectedProductType, favoriteNameSet, mealUsageStats, normalizedSearchQuery, foodSortOption]);
+
+    return filteredFoods.slice(0, MAX_LOCAL_SEARCH_RESULTS);
+  }, [
+    foodSortOption,
+    getFoodUsageCount,
+    rankedSearchFoods,
+    selectedCategoryFilter,
+    selectedProductType
+  ]);
 
   const filteredExternalSearchFoods = useMemo(() => externalSearchFoods.map(food => ({
     ...food,
@@ -2564,17 +2606,9 @@ export default function App() {
   }), [aiSearchFoods, selectedCategoryFilter, selectedProductType]);
 
   const searchSuggestions = useMemo(() => {
-    if (searchTokens.length === 0 || !showSuggestions) return [];
-
-    return indexedCombinedFoods
-      .filter(food => searchTokens.every(token => food.searchIndexText.includes(token)))
-      .sort((a, b) => {
-        const rankDiff = getFoodSearchRank(b) - getFoodSearchRank(a);
-        if (rankDiff !== 0) return rankDiff;
-        return a.catalogOrder - b.catalogOrder;
-      })
-      .slice(0, MAX_SEARCH_SUGGESTIONS);
-  }, [indexedCombinedFoods, searchTokens, showSuggestions, favoriteNameSet, mealUsageStats, normalizedSearchQuery]);
+    if (searchTokens.length === 0 || normalizedSearchQuery.length === 1 || !showSuggestions) return [];
+    return rankedSearchFoods.slice(0, MAX_SEARCH_SUGGESTIONS);
+  }, [normalizedSearchQuery.length, rankedSearchFoods, searchTokens.length, showSuggestions]);
 
   const databaseStats = useMemo(() => {
     const sourceCounts = [...productCatalog, ...extendedProductCatalog].reduce((acc, food) => {
@@ -4709,7 +4743,7 @@ export default function App() {
 
                   {filteredSearchFoods.length === 0 && filteredExternalSearchFoods.length === 0 && filteredAiSearchFoods.length === 0 && !isSearchingExternal && !isSearchingAI ? (
                     <div style={{ textAlign: 'center', color: '#94a3b8', padding: '40px 20px', fontSize: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                      <span>{selectedCategoryFilter === 'Недавні' ? 'Тут з’являться продукти, які ви додасте до щоденника.' : selectedCategoryFilter === 'Обрані' ? 'Позначте продукт зірочкою, щоб швидко знайти його тут.' : 'Продуктів не знайдено. Спробуйте іншу назву або створіть свій продукт.'}</span>
+                      <span>{normalizedSearchQuery.length === 1 ? 'Введіть ще один символ для пошуку у великій базі.' : selectedCategoryFilter === 'Недавні' ? 'Тут з’являться продукти, які ви додасте до щоденника.' : selectedCategoryFilter === 'Обрані' ? 'Позначте продукт зірочкою, щоб швидко знайти його тут.' : 'Продуктів не знайдено. Спробуйте іншу назву або створіть свій продукт.'}</span>
                       <button
                         className="btn-primary"
                         style={{ marginTop: '8px', padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: 'auto' }}
@@ -4731,7 +4765,7 @@ export default function App() {
                   ) : (
                     <>
                       {/* Local Results */}
-                      {filteredSearchFoods.map(food => {
+                      {!isCustomFoodModalOpen && !isBarcodeNotFoundModalOpen && filteredSearchFoods.map(food => {
                         const borderCol = food.supermarket ? getSupermarketColor(food.supermarket) : undefined;
                         const badgeClass = food.supermarket ? getSupermarketClass(food.supermarket) : '';
 
@@ -4794,7 +4828,7 @@ export default function App() {
                       })}
 
                       {/* AI Supermarket Results */}
-                      {filteredAiSearchFoods.map(food => {
+                      {!isCustomFoodModalOpen && !isBarcodeNotFoundModalOpen && filteredAiSearchFoods.map(food => {
                         const borderCol = getSupermarketColor(food.supermarket);
                         const badgeClass = getSupermarketClass(food.supermarket);
 
@@ -4831,7 +4865,7 @@ export default function App() {
                       })}
 
                       {/* External Open Food Facts Results */}
-                      {filteredExternalSearchFoods.map(food => (
+                      {!isCustomFoodModalOpen && !isBarcodeNotFoundModalOpen && filteredExternalSearchFoods.map(food => (
                         <div
                           key={food.id}
                           className="search-food-item"
